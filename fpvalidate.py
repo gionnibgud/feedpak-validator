@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: AGPL-3.0-only
 """feedpak validator — two levels.
 
   basic   spec conformance: exactly what the reference validate.py checks
