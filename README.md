@@ -7,8 +7,66 @@ feedpak-spec **v1.14.0**).
 
 | Level | What it checks |
 |-------|----------------|
-| **basic** | Spec conformance: JSON Schema, referenced-file existence, path safety, zip-slip guards. |
-| **strict** | Everything in basic, plus invariants no schema can express: unknown keys, id uniqueness, `note.s` within the tuning, dangling chord refs, non-decreasing times, positive-length spans, lyric side-files exist, and `notation_<id>.json` measures that don't overflow their time signature. |
+| **basic** | Spec conformance: JSON Schema, referenced-file existence, path safety, zip-slip guards. Exactly what the official reference validator checks — see [What gets checked](#what-gets-checked) for the full, explicit list. |
+| **strict** | Everything in basic, plus invariants no schema can express — full list below. |
+
+## What gets checked
+
+### basic — spec conformance
+
+Runs the vendored official reference validator (`vendor/feedpak-spec/tools/validate.py`)
+unmodified. On every pack:
+
+1. `manifest.yaml` exists at the package root and doesn't escape it through a symlink.
+2. `manifest.yaml` is valid YAML and its top level is a mapping.
+3. `manifest.yaml` conforms to `manifest.schema.json` (JSON Schema, Draft 2020-12).
+4. `feedpak_version` is a valid semver string; a major version newer than this validator
+   supports is a **warning**, not a failure.
+5. Every `arrangements[].file` pointer: safe relative path (no `..`, no leading `/`, no
+   backslash, no drive letter), exists, doesn't escape the package root — and the JSON it
+   points to conforms to `arrangement.schema.json`.
+6. Every `arrangements[].notation` pointer (if present): same path/existence checks, and the
+   JSON conforms to `notation.schema.json`.
+7. Every `stems[].file` pointer: safe relative path, exists, doesn't escape the root.
+8. Every optional JSON side-file the manifest actually references — `lyrics`, `vocal_pitch`,
+   `song_timeline`, `drum_tab`, `vocal_pitch_contour`, `keys`, `harmony`, `rigs`: safe path,
+   exists, doesn't escape the root, and conforms to its own schema.
+9. Non-JSON pointers — `cover`, `preview`: safe path, exists, doesn't escape the root (no
+   schema check — not JSON).
+10. Zip-form packs only: a zip-slip guard rejects archive entries with absolute paths, `..`
+    segments, backslashes, or drive letters/colons *before* extracting anything.
+
+Loose by design — the schemas allow unknown fields and require few of them, so basic is
+"nothing is missing or malformed," not "every field is exactly right."
+
+### strict — everything in basic, plus
+
+Invariants the JSON Schemas can't express (`fpvalidate.py`'s `_strict_schema_errors` /
+`_strict_semantics`):
+
+1. **Unknown keys rejected on `manifest.yaml`** — closed-world re-check of the manifest schema
+   (`additionalProperties: false` on every object node).
+2. **Unknown keys rejected on every arrangement JSON** — same closed-world check, but the
+   `note`/`chordNote` schema defs are first patched with the real §6.2 field set the schema
+   omits (`NOTE_EXTRA` in `fpvalidate.py`), so a genuinely-unknown field (a typo) is what gets
+   flagged — not a real spec field the schema just doesn't list.
+3. **Duplicate `arrangements[].id` values.**
+4. **Duplicate `stems[].id` values.**
+5. **More than one stem marked `default: true`.**
+6. **`lyric_tracks[].file` existence** — basic/the reference validator never opens these.
+7. **`note.s` (string index) in range** for the arrangement's tuning.
+8. **`handshape.chord_id` in range** of the arrangement's chord `templates`.
+9. **`chord.id` in range** of the arrangement's chord `templates`.
+10. **Non-decreasing time ordering** for `notes[].t`, `chords[].t`, `anchors[].time`,
+    `beats[].time`, `sections[].time`, `tempos[].time` (flags the first out-of-order entry per
+    array; equal timestamps are legal).
+11. **Positive-length spans** for `handshapes[]` and `phrases[]` (`end_time` must be `>
+    start_time`).
+12. **`notation_<id>.json` measures don't overflow their time signature** — each stave/voice's
+    beat durations (honoring `dot` and `tu` tuplet ratios) are summed and compared against the
+    measure's `ts` capacity, carried forward across measures that omit `ts` (§7.6 "omit if
+    unchanged"). Catches schema-invisible corruption like a beat-grid generator that stopped
+    early and dumped an entire song into one measure.
 
 ## Install
 
