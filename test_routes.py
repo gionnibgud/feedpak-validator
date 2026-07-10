@@ -7,11 +7,13 @@ the happy paths AND the trust boundary (a forged/unknown id is rejected, never
 validated). Run: python test_routes.py  (needs fastapi + httpx installed).
 """
 import io
+import json
 import logging
 import tempfile
 import zipfile
 from pathlib import Path
 
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -106,6 +108,58 @@ assert client.post(f"{BASE}/validate", json={"ids": "nope"}).status_code == 400
 huge = [f"deadbeef{i:08x}" for i in range(routes._MAX_VALIDATE_BATCH + 1)]
 r = client.post(f"{BASE}/validate", json={"ids": huge})
 assert r.status_code == 400 and "too many" in r.json()["error"], r.text
+
+# Default-strict — /validate and /validate-upload apply strict when the
+# client omits `strict` entirely (feedback: a schema-valid-but-broken pack
+# silently passing basic looked like a clean bill of health). Proven with a
+# pack that's schema-valid (basic PASS) but fails strict's closed-world
+# unknown-key check, so the two levels visibly disagree.
+def _bad_pack(pack_dir: Path) -> None:
+    (pack_dir / "arrangements").mkdir(parents=True)
+    (pack_dir / "stems").mkdir()
+    (pack_dir / "stems" / "full.ogg").write_bytes(b"x")
+    arr = {"name": "Lead", "tuning": [0] * 6, "templates": [],
+           "notes": [{"t": 1.0, "s": 0, "f": 0}], "handshapes": [], "chords": []}
+    (pack_dir / "arrangements" / "lead.json").write_text(json.dumps(arr))
+    m = {"feedpak_version": "1.11.0", "title": "T", "artist": "A", "duration": 10.0,
+         "bogus_key": 1,  # loose spec: basic ignores it; strict's closed-world check rejects it
+         "arrangements": [{"id": "lead", "name": "Lead", "file": "arrangements/lead.json"}],
+         "stems": [{"id": "full", "file": "stems/full.ogg", "default": True}]}
+    (pack_dir / "manifest.yaml").write_text(yaml.safe_dump(m))
+
+
+with tempfile.TemporaryDirectory() as t:
+    bad_root = Path(t) / "bad_dlc"
+    bad_root.mkdir()
+    bad_pack_dir = bad_root / "bad.feedpak"
+    _bad_pack(bad_pack_dir)
+    sapp = FastAPI()
+    routes.setup(sapp, {
+        "log": logging.getLogger("test-strict-default"),
+        "load_sibling": _load_sibling,
+        "get_dlc_dir": lambda: str(bad_root),
+    })
+    sclient = TestClient(sapp)
+    bad_id = sclient.get(f"{BASE}/packs").json()["items"][0]["id"]
+
+    # explicit basic still passes — the loose spec doesn't mind the bogus key.
+    r = sclient.post(f"{BASE}/validate", json={"ids": [bad_id], "strict": False}).json()
+    assert r["results"][0]["ok"] and r["results"][0]["level"] == "basic", r
+
+    # omitting `strict` entirely from the body must behave like strict:true.
+    r = sclient.post(f"{BASE}/validate", json={"ids": [bad_id]}).json()
+    assert not r["results"][0]["ok"] and r["results"][0]["level"] == "strict", r
+
+    # same for uploads — omit the `strict` form field entirely.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for p in sorted(bad_pack_dir.rglob("*")):
+            if p.is_file():
+                zf.write(p, p.relative_to(bad_pack_dir).as_posix())
+    buf.seek(0)
+    r = sclient.post(f"{BASE}/validate-upload",
+                      files={"files": ("bad.feedpak", buf, "application/zip")}).json()
+    assert not r["results"][0]["ok"] and r["results"][0]["level"] == "strict", r
 
 # /validate-upload — zip the minimal example and validate the bytes.
 buf = io.BytesIO()

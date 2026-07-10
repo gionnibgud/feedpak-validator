@@ -77,7 +77,10 @@ mounts the routes. A **Validator** entry appears in the nav.
 ## Standalone use
 
 Open **Validator**, search/pick library packs and/or drop `.feedpak` / `.sloppak` / `.zip`
-files, toggle **Strict**, and read the per-pack PASS/FAIL report. Each pack card leads with a
+files, and read the per-pack PASS/FAIL report. **Strict is on by default** — basic is spec
+conformance only and misses things like a notation measure overflowing its time signature
+(schema-valid, but broken), so a pack that would silently pass basic is exactly what strict
+exists to catch; uncheck it to see the looser, schema-only result. Each pack card leads with a
 plain-language takeaway ("This pack has 2 problems that need fixing…") for a non-dev reader,
 then a collapsible **Technical details** section with the precise, per-field breakdown — each
 failure names the file and the exact cause, e.g.
@@ -96,7 +99,8 @@ in `routes.py`) since validation is synchronous with no job queue behind it — 
 
 `screen.js` publishes `window.feedBackValidator` at plugin load and emits `validator:ready`
 on the `window.feedBack` bus. Each call resolves to one result dict
-`{ pack, level, ok, errors: [str], warnings: [str] }`:
+`{ pack, level, ok, errors: [str], warnings: [str] }`. **Defaults to `strict: true`** — pass
+`{ strict: false }` explicitly for the looser, schema-only check:
 
 ```js
 // feature-detect (plugin load order isn't guaranteed)
@@ -123,8 +127,8 @@ All under `/api/plugins/feedback-validator/`:
 |--------|------|------|----------|
 | GET  | `/spec-info` | — | `{repo, tag, commit}` — the pinned feedpak-spec version (from `vendor/feedpak-spec/VENDOR.txt`) that basic validates against |
 | GET  | `/packs` | `?q=&limit=300&offset=0` | `{items: [{id, name, source}], total, offset, limit}` |
-| POST | `/validate` | `{ids: [str], strict: bool}` (max 200 ids) | `{results, passed, total}` |
-| POST | `/validate-upload` | multipart `files[]` + `strict` | `{results, passed, total}` |
+| POST | `/validate` | `{ids: [str], strict: bool}` (default `true`, max 200 ids) | `{results, passed, total}` |
+| POST | `/validate-upload` | multipart `files[]` + `strict` (default `true`) | `{results, passed, total}` |
 
 Clients send opaque pack **ids** (never filesystem paths); the server resolves them against
 the current library enumeration and containment-checks every path, so the validator can't be
