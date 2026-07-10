@@ -73,19 +73,30 @@
         return { file: '', msg: s };
     }
 
-    function lineEl(kind, text) {
+    function lineEl(kind, text, explanation) {
         const li = document.createElement('li');
         li.className = 'fbv-line fbv-' + kind;
+
+        const row = document.createElement('div');
+        row.className = 'fbv-line-tech';
         const { file, msg } = splitError(text);
         if (file) {
             const tag = document.createElement('code');
             tag.className = 'fbv-file';
             tag.textContent = file;
-            li.appendChild(tag);
+            row.appendChild(tag);
         }
         const span = document.createElement('span');
         span.textContent = msg;
-        li.appendChild(span);
+        row.appendChild(span);
+        li.appendChild(row);
+
+        if (explanation) {
+            const ex = document.createElement('div');
+            ex.className = 'fbv-line-explain';
+            ex.textContent = explanation;
+            li.appendChild(ex);
+        }
         return li;
     }
 
@@ -146,13 +157,13 @@
             if (nErr) {
                 const ul = document.createElement('ul');
                 ul.className = 'fbv-lines';
-                res.errors.forEach((e) => ul.appendChild(lineEl('err', e)));
+                res.errors.forEach((e, i) => ul.appendChild(lineEl('err', e, res.explanations?.[i])));
                 details.appendChild(ul);
             }
             if (nWarn) {
                 const ul = document.createElement('ul');
                 ul.className = 'fbv-lines';
-                res.warnings.forEach((w) => ul.appendChild(lineEl('warn', 'warning: ' + w)));
+                res.warnings.forEach((w, i) => ul.appendChild(lineEl('warn', 'warning: ' + w, res.warning_explanations?.[i])));
                 details.appendChild(ul);
             }
             el.appendChild(details);

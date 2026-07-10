@@ -95,6 +95,12 @@ with tempfile.TemporaryDirectory() as t:
     assert res["ok"] is False and any("xyz" in e for e in res["errors"]), res
     import json as _json; _json.dumps(res)  # must be JSON-serializable
 
+    # explanations: index-aligned 1:1 with errors, one plain-English sentence
+    # each — not a generic boilerplate line repeated for every error.
+    assert len(res["explanations"]) == len(res["errors"]), res
+    assert len(set(res["explanations"])) > 1, "every error got the same explanation"
+    assert res["warning_explanations"] == [], res
+
     # time ordering: descending note times + an inverted handshape span. Both are
     # schema-valid (loose spec), so basic PASSes; strict must FAIL on both.
     tbad = Path(t) / "timebad.feedpak"
@@ -150,5 +156,42 @@ with tempfile.TemporaryDirectory() as t:
     assert not r.ok, "ts must carry forward across measures that omit it"
     assert "measure 2" in "\n".join(r.errors), r.errors
 
+# _explain(): every rule must match its own trigger text (each rule proven
+# reachable) and produce a DIFFERENT sentence from its neighbors (otherwise a
+# rule is dead weight — already covered by a broader one). An unmatched line
+# falls back to the generic sentence rather than raising or returning empty.
+_EXPLAIN_CASES = [
+    "notation_keys.json: measure 2 stave 'rh' voice 1: beats sum to 5 whole note(s) but time signature 4/4 only holds 1",
+    "arrangements/lead.json: notes/0: unexpected field 'xyz' — not part of the feedpak spec (a typo, or data this validator doesn't recognize)",
+    "manifest.yaml: top level: required field 'title' is missing",
+    "manifest.yaml: year: should be of type integer (got 'nineteen')",
+    "manifest.yaml: format: value 'wav' is not allowed — must be one of ['ogg', 'mp3']",
+    "manifest.yaml: title: must not be empty",
+    "manifest.yaml: feedpak_version: is not in the required format",
+    "handshape.chord_id=42 out of range — but this arrangement has only 5 chord template(s)",
+    "arrangements/lead.json: note.s=99 out of range for 6-string tuning",
+    "arrangements/lead.json: notes[3].t=2.0 < previous 5.0 (not in time order)",
+    "arrangements/lead.json: handshapes[0] end_time 1.0 <= start_time 2.0",
+    "duplicate arrangement id: 'lead'",
+    "more than one stem marked default:true",
+    "missing file referenced by manifest: arrangements/lead.json",
+    "lyric_tracks[0].file missing: lyrics/en.json",
+    "manifest 'cover' is not a safe relative path: '/etc/passwd'",
+    "manifest 'cover' escapes the package root (symlink?): cover.jpg",
+    "unsafe path inside archive: ../../etc/passwd",
+    "manifest.yaml: not valid YAML (mapping values are not allowed here)",
+    "arrangements/lead.json: not valid JSON (Expecting value: line 1 column 1)",
+    "no manifest.yaml at package root",
+    "manifest.yaml: top level must be a mapping",
+    "feedpak_version is not a valid semver string: '1.0'",
+    "not a directory or a zip archive",
+]
+explanations = [fp._explain(c) for c in _EXPLAIN_CASES]
+assert all(e != fp._EXPLAIN_FALLBACK for e in explanations), \
+    [c for c, e in zip(_EXPLAIN_CASES, explanations) if e == fp._EXPLAIN_FALLBACK]
+assert len(set(explanations)) == len(_EXPLAIN_CASES), \
+    "two trigger cases produced the same explanation — one rule is unreachable"
+assert fp._explain("some future check nobody wrote a rule for yet") == fp._EXPLAIN_FALLBACK
+
 print("ok — strict catches unknown keys, bad ranges, dangling refs, out-of-order times, "
-      "notation measure overflow, and all of the above in dirs and zips")
+      "notation measure overflow, per-error explanations, and all of the above in dirs and zips")

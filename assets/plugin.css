@@ -89,8 +89,11 @@
 .fbv-card-details > summary::before { content: '▸ '; }
 .fbv-card-details[open] > summary::before { content: '▾ '; }
 
-.fbv-lines { list-style: none; margin: 0; padding: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
-.fbv-line { display: flex; gap: 8px; align-items: baseline; padding-left: 10px; border-left: 2px solid transparent; }
+.fbv-lines { list-style: none; margin: 0; padding: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.fbv-line { display: flex; flex-direction: column; gap: 3px; padding-left: 10px; border-left: 2px solid transparent; }
+.fbv-line-tech { display: flex; gap: 8px; align-items: baseline; }
+.fbv-line-explain { color: #8b93a6; font-size: 12px; }
 .fbv-err { border-left-color: rgba(224,85,85,.5); }
-.fbv-warn { border-left-color: rgba(232,192,64,.5); color: #d8c98a; }
+.fbv-warn { border-left-color: rgba(232,192,64,.5); }
+.fbv-warn .fbv-line-tech { color: #d8c98a; }
 .fbv-file { flex: none; color: #8b93a6; background: rgba(255,255,255,.05); }

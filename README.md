@@ -84,7 +84,8 @@ exists to catch; uncheck it to see the looser, schema-only result. Each pack car
 plain-language takeaway ("This pack has 2 problems that need fixing…") for a non-dev reader,
 then a collapsible **Technical details** section with the precise, per-field breakdown — each
 failure names the file and the exact cause, e.g.
-`arrangements/lead.json: notes/0: unexpected field 'xyz' — not part of the feedpak spec`.
+`arrangements/lead.json: notes/0: unexpected field 'xyz' — not part of the feedpak spec`, with
+its own plain-English line underneath it (e.g. "There's a field feedBack doesn't recognize…").
 The header shows which pinned feedpak-spec version basic is checking against (linked to the
 exact commit) — purely informational; see [Versioning](#versioning) for how it's updated.
 
@@ -99,7 +100,10 @@ in `routes.py`) since validation is synchronous with no job queue behind it — 
 
 `screen.js` publishes `window.feedBackValidator` at plugin load and emits `validator:ready`
 on the `window.feedBack` bus. Each call resolves to one result dict
-`{ pack, level, ok, errors: [str], warnings: [str] }`. **Defaults to `strict: true`** — pass
+`{ pack, level, ok, errors: [str], warnings: [str], explanations: [str], warning_explanations: [str] }`.
+`explanations`/`warning_explanations` are index-aligned with `errors`/`warnings` — one
+plain-English sentence per technical line, pattern-matched by error category
+(`fpvalidate._EXPLAIN`), not a per-pack summary. **Defaults to `strict: true`** — pass
 `{ strict: false }` explicitly for the looser, schema-only check:
 
 ```js

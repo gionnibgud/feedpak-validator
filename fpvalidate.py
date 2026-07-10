@@ -367,19 +367,112 @@ def _friendly(errors: list[str]) -> list[str]:
     return out
 
 
+# ---- plain-English explanations (one per error/warning line) ----------------
+# A friendly() line is still precise ("notes/0: unexpected field 'xyz'...") —
+# these are a further, one-sentence "why this matters" translation for a
+# reader who doesn't know what a JSON Schema is. Pattern-matched on the
+# HUMANIZED text (not the raw jsonschema/reference-validator wording), since
+# basic's errors come from the vendored reference validator verbatim — we
+# can't tag them with a category at the source without patching a file that's
+# supposed to stay pinned-verbatim. Every pattern here is tied to wording this
+# module (or the vendored validator, matched post-_humanize) actually
+# produces; review this list whenever a new check is added to
+# _strict_semantics / _check_notation_measures / _HUMANIZE so a new error type
+# doesn't silently fall through to the generic fallback.
+def _has(*needles: str):
+    return lambda s: all(n in s for n in needles)
+
+
+_EXPLAIN: list[tuple[object, str]] = [
+    (_has("beats sum to", "only holds"),
+     "The sheet music crams more notes into a measure than the time signature allows — "
+     "it will likely look wrong or fail to display correctly."),
+    (_has("unexpected field"),
+     "There's a field feedBack doesn't recognize — probably a typo or leftover from "
+     "another tool. Usually harmless, but worth checking."),
+    (_has("required field", "is missing"),
+     "A piece of information feedBack needs is missing from this file."),
+    (_has("should be of type"),
+     "A value in this file is the wrong kind of data (e.g. text where a number was expected)."),
+    (_has("is not allowed", "must be one of"),
+     "A value in this file isn't one of the options feedBack understands."),
+    (_has("must not be empty"),
+     "A required piece of text is empty."),
+    (_has("is not in the required format"),
+     "A value in this file doesn't match the format feedBack expects (e.g. a date or "
+     "version number written wrong)."),
+    (_has("chord template"),
+     "A chord shape points to a chord definition that doesn't exist in this pack."),
+    (_has("out of range for", "string tuning"),
+     "A note is written for a guitar/bass string that doesn't exist on this instrument's tuning."),
+    (_has("not in time order"),
+     "Some events in this song are listed out of chronological order, which can cause "
+     "stutters or glitches during playback."),
+    (_has("end_time", "start_time"),
+     "A timed section in this song has a zero or negative length, which doesn't make "
+     "sense and may break playback."),
+    (lambda s: s.startswith("duplicate "),
+     "Two parts of this pack are using the same internal ID, which can confuse feedBack "
+     "about which one to use."),
+    (_has("more than one stem marked default"),
+     "More than one audio track is marked as the default — feedBack won't know which one "
+     "to play first."),
+    (_has("missing file referenced by manifest"),
+     "This pack points to a file that isn't actually there — that file won't load."),
+    (_has("lyric_tracks", "missing"),
+     "This pack points to a lyrics file that isn't actually there — lyrics won't load."),
+    (_has("is not a safe relative path"),
+     "This pack references a file in a way that looks unsafe — rejected for safety."),
+    (_has("escapes the package root"),
+     "This pack references a file in a way that looks unsafe (trying to reach outside "
+     "the pack) — rejected for safety."),
+    (_has("unsafe path inside archive"),
+     "This pack's zip file contains an entry that looks unsafe — rejected for safety."),
+    (_has("not valid YAML"),
+     "This pack's core info file isn't formatted correctly and can't be read at all."),
+    (_has("not valid JSON"),
+     "A file in this pack isn't formatted correctly and can't be read at all."),
+    (_has("no manifest.yaml at package root"),
+     "This pack is missing its core info file — feedBack can't identify the song at all."),
+    (_has("top level must be a mapping"),
+     "This pack's core info file is structured incorrectly — feedBack can't read it."),
+    (_has("is not a valid semver string"),
+     "The pack's version number isn't formatted correctly."),
+    (_has("not a directory or a zip archive"),
+     "This isn't a valid feedpak package at all — feedBack can't open it."),
+]
+
+_EXPLAIN_FALLBACK = "This is a lower-level technical issue that could affect how the pack loads or displays."
+
+
+def _explain(line: str) -> str:
+    for pred, text in _EXPLAIN:
+        if pred(line):
+            return text
+    return _EXPLAIN_FALLBACK
+
+
 def validate(path, strict: bool = False) -> dict:
     """Programmatic entry point for embedders (e.g. a fee[dB]ack plugin backend).
 
     Returns a JSON-serializable result — no printing, no Report internals:
-        {"pack", "level", "ok", "errors": [friendly str...], "warnings": [...]}
+        {"pack", "level", "ok", "errors": [friendly str...], "warnings": [...],
+         "explanations": [str...], "warning_explanations": [str...]}
+    `explanations`/`warning_explanations` are index-aligned with
+    `errors`/`warnings` — one plain-English sentence per line, for a reader
+    who wants to know what a specific technical line actually means.
     """
     rep = check(Path(path), strict)
+    errors = _friendly(rep.errors)
+    warnings = [_humanize(w) for w in rep.warnings]
     return {
         "pack": rep.label,
         "level": "strict" if strict else "basic",
         "ok": rep.ok,
-        "errors": _friendly(rep.errors),
-        "warnings": [_humanize(w) for w in rep.warnings],
+        "errors": errors,
+        "warnings": warnings,
+        "explanations": [_explain(e) for e in errors],
+        "warning_explanations": [_explain(w) for w in warnings],
     }
 
 
