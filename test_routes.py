@@ -28,6 +28,14 @@ def _load_sibling(name):
     return importlib.import_module(name)
 
 
+def _zip(src: Path, buf: io.BytesIO) -> None:
+    with zipfile.ZipFile(buf, "w") as zf:
+        for p in sorted(src.rglob("*")):
+            if p.is_file():
+                zf.write(p, p.relative_to(src).as_posix())
+    buf.seek(0)
+
+
 def _context():
     # No get_sloppak_cache_dir: /packs is library-only (feedback: a pack once
     # opened gets an extracted working copy in sloppak_cache/ under a
@@ -152,23 +160,14 @@ with tempfile.TemporaryDirectory() as t:
 
     # same for uploads — omit the `strict` form field entirely.
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        for p in sorted(bad_pack_dir.rglob("*")):
-            if p.is_file():
-                zf.write(p, p.relative_to(bad_pack_dir).as_posix())
-    buf.seek(0)
+    _zip(bad_pack_dir, buf)
     r = sclient.post(f"{BASE}/validate-upload",
                       files={"files": ("bad.feedpak", buf, "application/zip")}).json()
     assert not r["results"][0]["ok"] and r["results"][0]["level"] == "strict", r
 
 # /validate-upload — zip the minimal example and validate the bytes.
 buf = io.BytesIO()
-src = EXAMPLES / "minimal.feedpak"
-with zipfile.ZipFile(buf, "w") as zf:
-    for p in sorted(src.rglob("*")):
-        if p.is_file():
-            zf.write(p, p.relative_to(src).as_posix())
-buf.seek(0)
+_zip(EXAMPLES / "minimal.feedpak", buf)
 r = client.post(f"{BASE}/validate-upload",
                 files={"files": ("minimal.feedpak", buf, "application/zip")},
                 data={"strict": "true"}).json()

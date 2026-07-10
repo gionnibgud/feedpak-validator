@@ -495,10 +495,5 @@ def main(argv: list[str]) -> int:
     return 1 if failed else 0
 
 
-def _cli() -> None:
-    """Zero-arg entry point for the `fpvalidate` console script."""
-    raise SystemExit(main(sys.argv))
-
-
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
