@@ -29,11 +29,14 @@
 
     // Service other plugins call. Each returns a single result dict:
     //   { pack, level, ok, errors:[str], warnings:[str] }
+    // Defaults to strict — basic is spec-conformance only and misses invariants
+    // like notation measures overflowing their time signature; callers that
+    // want the looser check opt in with { strict: false }.
     window.feedBackValidator = {
-        async validatePack(id, { strict = false } = {}) {
+        async validatePack(id, { strict = true } = {}) {
             return (await validateIds([id], strict)).results[0];
         },
-        async validateBytes(blob, { strict = false, filename = 'song.feedpak' } = {}) {
+        async validateBytes(blob, { strict = true, filename = 'song.feedpak' } = {}) {
             const file = blob instanceof File ? blob : new File([blob], filename);
             return (await validateFiles([file], strict)).results[0];
         },
