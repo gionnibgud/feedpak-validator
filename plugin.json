@@ -1,0 +1,14 @@
+{
+  "id": "feedback-validator",
+  "name": "Feedpak Validator",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Validate .feedpak packages against the spec, in-app or from other plugins.",
+  "category": "tools",
+  "icon": "✓",
+  "routes": "routes.py",
+  "screen": "screen.html",
+  "script": "screen.js",
+  "styles": "assets/plugin.css",
+  "nav": { "label": "Validator", "screen": "plugin-feedback-validator" }
+}

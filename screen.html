@@ -1,0 +1,44 @@
+<div class="fbv-root fb-selectable">
+  <header class="fbv-head">
+    <h1 class="fbv-title">Feedpak Validator</h1>
+    <p class="fbv-sub">Check <code>.feedpak</code> packages against the spec. Basic = spec
+      conformance; strict also checks invariants the schemas can't express.</p>
+  </header>
+
+  <div class="fbv-controls">
+    <label class="fbv-toggle">
+      <input type="checkbox" id="fbv-strict"> Strict
+    </label>
+    <button type="button" id="fbv-refresh" class="fbv-btn">Refresh library</button>
+    <button type="button" id="fbv-validate" class="fbv-btn fbv-btn-primary">Validate selected</button>
+  </div>
+
+  <div class="fbv-cols">
+    <section class="fbv-panel">
+      <div class="fbv-panel-head">
+        <h2>Library packs</h2>
+        <div class="fbv-panel-actions">
+          <span id="fbv-selcount" class="fbv-selcount"></span>
+          <button type="button" id="fbv-selall" class="fbv-link">select visible</button>
+          <button type="button" id="fbv-clearsel" class="fbv-link">clear</button>
+        </div>
+      </div>
+      <input type="search" id="fbv-search" class="fbv-search"
+             placeholder="Search packs by name…" autocomplete="off">
+      <div id="fbv-packs" class="fbv-packs">Loading…</div>
+      <div id="fbv-packs-note" class="fbv-packs-note"></div>
+    </section>
+
+    <section class="fbv-panel">
+      <h2>Upload</h2>
+      <div id="fbv-drop" class="fbv-drop" tabindex="0" role="button"
+           aria-label="Choose or drop feedpak files to validate">
+        Drop <code>.feedpak</code> / <code>.sloppak</code> / <code>.zip</code> here,
+        or click to choose
+      </div>
+      <input type="file" id="fbv-file" accept=".feedpak,.sloppak,.zip" multiple hidden>
+    </section>
+  </div>
+
+  <div id="fbv-results" class="fbv-results" aria-live="polite"></div>
+</div>

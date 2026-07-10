@@ -1,0 +1,67 @@
+/* feedback-validator — plain CSS (no Tailwind build). Dark palette matching
+   feedBack's chrome; accent #4080e0, warn gold #e8c040, fail red #e05555. */
+
+.fbv-root { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px;
+  color: #d8dde6; font-size: 14px; line-height: 1.5; }
+.fbv-head { margin-bottom: 20px; }
+.fbv-title { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+.fbv-sub { color: #9aa3b2; margin: 0; }
+.fbv-root code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .9em; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
+
+.fbv-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.fbv-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.fbv-btn { background: #2a3040; color: #d8dde6; border: 1px solid #3a4256;
+  padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.fbv-btn:hover { background: #333a4d; }
+.fbv-btn:disabled { opacity: .5; cursor: default; }
+.fbv-btn-primary { background: #4080e0; border-color: #4080e0; color: #fff; }
+.fbv-btn-primary:hover { background: #3672cf; }
+.fbv-link { background: none; border: none; color: #4080e0; cursor: pointer; font-size: 13px; padding: 0; }
+
+.fbv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 680px) { .fbv-cols { grid-template-columns: 1fr; } }
+.fbv-panel { background: rgba(255,255,255,.03); border: 1px solid #2a3040;
+  border-radius: 8px; padding: 14px; }
+.fbv-panel h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; color: #b6bdcc; }
+.fbv-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.fbv-panel-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fbv-selcount { font-size: 12px; color: #7d8698; }
+
+.fbv-search { width: 100%; box-sizing: border-box; margin: 8px 0 10px; background: #1b2030;
+  border: 1px solid #2a3040; color: #d8dde6; border-radius: 6px; padding: 7px 10px; font-size: 13px; }
+.fbv-search:focus { outline: none; border-color: #4080e0; }
+.fbv-packs-note { margin-top: 6px; font-size: 12px; color: #7d8698; }
+
+.fbv-packs { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.fbv-pack { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+.fbv-pack:hover { background: rgba(255,255,255,.05); }
+.fbv-src { margin-left: auto; font-size: 11px; color: #7d8698; text-transform: uppercase; letter-spacing: .04em; }
+
+.fbv-drop { border: 1.5px dashed #3a4256; border-radius: 8px; padding: 28px 12px;
+  text-align: center; color: #9aa3b2; cursor: pointer; transition: border-color .12s, background .12s; }
+.fbv-drop:hover, .fbv-drop:focus-visible { border-color: #4080e0; outline: none; }
+.fbv-drag { border-color: #4080e0; background: rgba(64,128,224,.08); }
+
+.fbv-results { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
+.fbv-summary { font-size: 16px; font-weight: 600; }
+.fbv-summary.fbv-ok { color: #46c26a; }
+.fbv-summary.fbv-fail { color: #e05555; }
+
+.fbv-card { border: 1px solid #2a3040; border-radius: 8px; overflow: hidden; }
+.fbv-card.fbv-ok { border-left: 3px solid #46c26a; }
+.fbv-card.fbv-fail { border-left: 3px solid #e05555; }
+.fbv-card-sum { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  cursor: pointer; list-style: none; }
+.fbv-card-sum::-webkit-details-marker { display: none; }
+.fbv-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; letter-spacing: .04em; }
+.fbv-ok .fbv-badge { background: rgba(70,194,106,.18); color: #46c26a; }
+.fbv-fail .fbv-badge { background: rgba(224,85,85,.18); color: #e05555; }
+.fbv-card-name { font-weight: 500; }
+.fbv-card-lvl { margin-left: auto; font-size: 11px; color: #7d8698; text-transform: uppercase; letter-spacing: .04em; }
+
+.fbv-lines { list-style: none; margin: 0; padding: 4px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.fbv-line { display: flex; gap: 8px; align-items: baseline; padding-left: 10px; border-left: 2px solid transparent; }
+.fbv-err { border-left-color: rgba(224,85,85,.5); }
+.fbv-warn { border-left-color: rgba(232,192,64,.5); color: #d8c98a; }
+.fbv-file { flex: none; color: #8b93a6; background: rgba(255,255,255,.05); }
