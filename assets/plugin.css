@@ -70,16 +70,26 @@
 .fbv-card { border: 1px solid #2a3040; border-radius: 8px; overflow: hidden; }
 .fbv-card.fbv-ok { border-left: 3px solid #46c26a; }
 .fbv-card.fbv-fail { border-left: 3px solid #e05555; }
-.fbv-card-sum { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  cursor: pointer; list-style: none; }
-.fbv-card-sum::-webkit-details-marker { display: none; }
+.fbv-card-sum { display: flex; align-items: center; gap: 10px; padding: 10px 12px 0; }
 .fbv-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; letter-spacing: .04em; }
 .fbv-ok .fbv-badge { background: rgba(70,194,106,.18); color: #46c26a; }
 .fbv-fail .fbv-badge { background: rgba(224,85,85,.18); color: #e05555; }
 .fbv-card-name { font-weight: 500; }
 .fbv-card-lvl { margin-left: auto; font-size: 11px; color: #7d8698; text-transform: uppercase; letter-spacing: .04em; }
 
-.fbv-lines { list-style: none; margin: 0; padding: 4px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+/* Always-visible, non-technical takeaway — the thing a non-dev reads instead
+   of the bullet list below it. */
+.fbv-card-human { margin: 4px 12px 10px; color: #b6bdcc; font-size: 13px; }
+
+/* Technical detail stays collapsible — its own nested <details>, not the
+   whole card, so the human line above is never hidden. */
+.fbv-card-details { padding: 0 12px 12px; }
+.fbv-card-details > summary { cursor: pointer; list-style: none; font-size: 12px; color: #7d8698; }
+.fbv-card-details > summary::-webkit-details-marker { display: none; }
+.fbv-card-details > summary::before { content: '▸ '; }
+.fbv-card-details[open] > summary::before { content: '▾ '; }
+
+.fbv-lines { list-style: none; margin: 0; padding: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
 .fbv-line { display: flex; gap: 8px; align-items: baseline; padding-left: 10px; border-left: 2px solid transparent; }
 .fbv-err { border-left-color: rgba(224,85,85,.5); }
 .fbv-warn { border-left-color: rgba(232,192,64,.5); color: #d8c98a; }

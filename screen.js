@@ -86,13 +86,33 @@
         return li;
     }
 
-    function card(res) {
-        const el = document.createElement('details');
-        el.className = 'fbv-card ' + (res.ok ? 'fbv-ok' : 'fbv-fail');
-        const hasDetail = (res.errors?.length || res.warnings?.length);
-        if (!res.ok || res.warnings?.length) el.open = true;
+    // A plain-language takeaway for someone who doesn't know what a JSON
+    // Schema is — sits always-visible under the PASS/FAIL line, above the
+    // collapsible technical detail. Deliberately doesn't parse error text
+    // (fragile, and drifts as strict grows); it only reasons about counts
+    // and level, so it stays accurate as new checks are added.
+    function humanSummary(res) {
+        const nErr = res.errors?.length || 0;
+        const nWarn = res.warnings?.length || 0;
+        if (res.ok && !nWarn) {
+            return res.level === 'strict'
+                ? 'This pack is fully valid — everything checks out.'
+                : "This pack meets the basic requirements, but hasn't been checked as "
+                  + 'thoroughly as it could be. Turn on Strict above for a more complete check.';
+        }
+        if (res.ok) {
+            return `This pack is valid, but has ${nWarn} thing${nWarn === 1 ? '' : 's'} `
+                 + 'worth a look (see below).';
+        }
+        return `This pack has ${nErr} problem${nErr === 1 ? '' : 's'} that need fixing before `
+             + 'it will work correctly in feedBack — see below for exactly what and where.';
+    }
 
-        const sum = document.createElement('summary');
+    function card(res) {
+        const el = document.createElement('div');
+        el.className = 'fbv-card ' + (res.ok ? 'fbv-ok' : 'fbv-fail');
+
+        const sum = document.createElement('div');
         sum.className = 'fbv-card-sum';
         const badge = document.createElement('span');
         badge.className = 'fbv-badge';
@@ -104,25 +124,35 @@
         lvl.className = 'fbv-card-lvl';
         lvl.textContent = res.level;
         sum.append(badge, name, lvl);
-        if (!hasDetail) {
-            const none = document.createElement('span');
-            none.className = 'fbv-card-lvl';
-            none.textContent = 'no issues';
-            sum.appendChild(none);
-        }
         el.appendChild(sum);
 
-        if (res.errors?.length) {
-            const ul = document.createElement('ul');
-            ul.className = 'fbv-lines';
-            res.errors.forEach((e) => ul.appendChild(lineEl('err', e)));
-            el.appendChild(ul);
-        }
-        if (res.warnings?.length) {
-            const ul = document.createElement('ul');
-            ul.className = 'fbv-lines';
-            res.warnings.forEach((w) => ul.appendChild(lineEl('warn', 'warning: ' + w)));
-            el.appendChild(ul);
+        const human = document.createElement('p');
+        human.className = 'fbv-card-human';
+        human.textContent = humanSummary(res);
+        el.appendChild(human);
+
+        const nErr = res.errors?.length || 0;
+        const nWarn = res.warnings?.length || 0;
+        if (nErr || nWarn) {
+            const details = document.createElement('details');
+            details.className = 'fbv-card-details';
+            details.open = !res.ok || nWarn > 0;
+            const detSum = document.createElement('summary');
+            detSum.textContent = 'Technical details';
+            details.appendChild(detSum);
+            if (nErr) {
+                const ul = document.createElement('ul');
+                ul.className = 'fbv-lines';
+                res.errors.forEach((e) => ul.appendChild(lineEl('err', e)));
+                details.appendChild(ul);
+            }
+            if (nWarn) {
+                const ul = document.createElement('ul');
+                ul.className = 'fbv-lines';
+                res.warnings.forEach((w) => ul.appendChild(lineEl('warn', 'warning: ' + w)));
+                details.appendChild(ul);
+            }
+            el.appendChild(details);
         }
         return el;
     }

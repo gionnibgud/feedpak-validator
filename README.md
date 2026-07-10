@@ -77,8 +77,10 @@ mounts the routes. A **Validator** entry appears in the nav.
 ## Standalone use
 
 Open **Validator**, search/pick library packs and/or drop `.feedpak` / `.sloppak` / `.zip`
-files, toggle **Strict**, and read the per-pack PASS/FAIL report. Each failure names the file
-and the plain-English cause, e.g.
+files, toggle **Strict**, and read the per-pack PASS/FAIL report. Each pack card leads with a
+plain-language takeaway ("This pack has 2 problems that need fixing…") for a non-dev reader,
+then a collapsible **Technical details** section with the precise, per-field breakdown — each
+failure names the file and the exact cause, e.g.
 `arrangements/lead.json: notes/0: unexpected field 'xyz' — not part of the feedpak spec`.
 The header shows which pinned feedpak-spec version basic is checking against (linked to the
 exact commit) — purely informational; see [Versioning](#versioning) for how it's updated.
