@@ -17,6 +17,26 @@ def _zip(src: Path, dest: Path):
                 zf.write(p, p.relative_to(src).as_posix())
 
 
+def _notation_pack(root: Path, measures):
+    """A minimal pack with one arrangement that has both a tab `file` (kept
+    trivially valid) and a `notation` side-file, mirroring how real packs
+    (e.g. the TGA_Full_07-06_Testing.feedpak bug report) pair the two."""
+    (root / "arrangements").mkdir(parents=True)
+    (root / "stems").mkdir()
+    (root / "stems" / "full.ogg").write_bytes(b"x")
+    arr = {"name": "Keys", "tuning": [0] * 6, "templates": [],
+           "notes": [{"t": 1.0, "s": 0, "f": 0}], "handshapes": [], "chords": []}
+    (root / "arrangements" / "keys.json").write_text(json.dumps(arr))
+    (root / "notation_keys.json").write_text(json.dumps({
+        "version": 1, "staves": [{"id": "rh", "clef": "G2"}], "measures": measures,
+    }))
+    m = {"feedpak_version": "1.11.0", "title": "T", "artist": "A", "duration": 10.0,
+         "arrangements": [{"id": "keys", "name": "Keys", "file": "arrangements/keys.json",
+                            "notation": "notation_keys.json", "type": "piano"}],
+         "stems": [{"id": "full", "file": "stems/full.ogg", "default": True}]}
+    (root / "manifest.yaml").write_text(yaml.safe_dump(m))
+
+
 def _pack(root: Path, manifest_extra=None, note_s=0, chord_id=0, note_extra=None,
           notes=None, hs_end=2.0):
     (root / "arrangements").mkdir(parents=True)
@@ -84,4 +104,44 @@ with tempfile.TemporaryDirectory() as t:
     badzip = Path(t) / "bad.feedpak.zip"; _zip(bad, badzip)
     assert not fp.check(badzip, strict=True).ok, "strict must FAIL a bad zip"
 
-print("ok — strict catches unknown keys, bad ranges, dangling refs, out-of-order times, in dirs and zips")
+    # notation_<id>.json measure-capacity overflow (feedback: TGA_Full_07-06_
+    # Testing.feedpak — a beat-grid generator stopped early and a downstream
+    # measure-splitter dumped the rest of the song into one 4/4 measure).
+    # No JSON Schema sums beat durations against ts, so this is schema-valid —
+    # basic must PASS; strict must FAIL.
+    def _beats(n, dur=4):
+        return [{"t": i * 0.1, "dur": dur, "notes": [{"midi": 60}]} for i in range(n)]
+
+    ok_measures = [{"idx": 1, "t": 0.0, "ts": [4, 4],
+                     "staves": {"rh": {"voices": [{"v": 1, "beats": _beats(4)}]}}}]
+    notok = Path(t) / "notationok.feedpak"
+    _notation_pack(notok, ok_measures)
+    assert fp.check(notok, strict=True).ok, "a measure exactly filling its time signature must pass strict"
+
+    bad_measures = [{"idx": 1, "t": 0.0, "ts": [4, 4],
+                      "staves": {"rh": {"voices": [{"v": 1, "beats": _beats(20)}]}}}]
+    notbad = Path(t) / "notationbad.feedpak"
+    _notation_pack(notbad, bad_measures)
+    assert fp.check(notbad, strict=False).ok, \
+        "loose spec: basic must PASS a schema-valid but measure-overflowing notation file"
+    r = fp.check(notbad, strict=True)
+    assert not r.ok, "strict must FAIL a notation measure that overflows its time signature"
+    joined = "\n".join(r.errors)
+    assert "notation_keys.json" in joined and "4/4" in joined and "only holds" in joined, joined
+
+    # ts is 'omit if unchanged' (§7.6) and must carry forward — measure 2 sets
+    # no ts of its own but still overflows the ts=[4,4] measure 1 established.
+    carry_measures = [
+        {"idx": 1, "t": 0.0, "ts": [4, 4],
+         "staves": {"rh": {"voices": [{"v": 1, "beats": _beats(4)}]}}},
+        {"idx": 2, "t": 1.0,
+         "staves": {"rh": {"voices": [{"v": 1, "beats": _beats(20)}]}}},
+    ]
+    notcarry = Path(t) / "notationcarry.feedpak"
+    _notation_pack(notcarry, carry_measures)
+    r = fp.check(notcarry, strict=True)
+    assert not r.ok, "ts must carry forward across measures that omit it"
+    assert "measure 2" in "\n".join(r.errors), r.errors
+
+print("ok — strict catches unknown keys, bad ranges, dangling refs, out-of-order times, "
+      "notation measure overflow, and all of the above in dirs and zips")

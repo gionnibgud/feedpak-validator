@@ -8,7 +8,7 @@ feedpak-spec **v1.14.0**).
 | Level | What it checks |
 |-------|----------------|
 | **basic** | Spec conformance: JSON Schema, referenced-file existence, path safety, zip-slip guards. |
-| **strict** | Everything in basic, plus invariants no schema can express: unknown keys, id uniqueness, `note.s` within the tuning, dangling chord refs, non-decreasing times, positive-length spans, lyric side-files exist. |
+| **strict** | Everything in basic, plus invariants no schema can express: unknown keys, id uniqueness, `note.s` within the tuning, dangling chord refs, non-decreasing times, positive-length spans, lyric side-files exist, and `notation_<id>.json` measures that don't overflow their time signature. |
 
 ## Install
 

@@ -16,6 +16,8 @@
             - note/chord/beat/section/anchor/tempo times non-decreasing
             - handshape/phrase spans have positive length
             - lyric_tracks side-files exist (validate.py never opens them)
+            - notation_<id>.json measures don't overflow their time signature
+              (voice beat-durations, incl. dot/tuplet, summed against ts)
 
 PACK is a *.feedpak/ directory or a *.feedpak zip archive; both levels handle both.
 
@@ -178,6 +180,67 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
                 if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b <= a:
                     rep.err(f"{f}: {kind}[{j}] end_time {b} <= start_time {a}")
                     break
+
+    # notation_<id>.json (§7.6): a per-arrangement side-file, not the `file`
+    # loop above — a notation-only arrangement MAY omit `file` entirely, so
+    # this runs independent of the `if not f` skip.
+    for a in arrs:
+        nf = a.get("notation")
+        if not nf or not (root / nf).is_file():
+            continue
+        try:
+            ndata = json.loads((root / nf).read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue  # malformed JSON is already a basic-level schema failure
+        _check_notation_measures(rep, nf, ndata)
+
+
+def _beat_whole_notes(b: dict) -> float:
+    """A beat's duration in whole notes: 1/dur, scaled by `dot` (1->1.5x,
+    2->1.75x per standard dotted-note arithmetic) and `tu` ([num, den]
+    tuplet — actual duration = written * den/num, e.g. a 3-in-the-time-of-2
+    triplet plays at 2/3 written length). Malformed fields contribute 0
+    rather than raising — schema validation already flags the field itself."""
+    dur = b.get("dur")
+    if not isinstance(dur, (int, float)) or dur <= 0:
+        return 0.0
+    val = 1.0 / dur
+    dot = b.get("dot")
+    if dot == 1:
+        val *= 1.5
+    elif dot == 2:
+        val *= 1.75
+    tu = b.get("tu")
+    if (isinstance(tu, list) and len(tu) == 2
+            and all(isinstance(x, (int, float)) and x for x in tu)):
+        val *= tu[1] / tu[0]
+    return val
+
+
+def _check_notation_measures(rep: ref.Report, f: str, data: dict) -> None:
+    """Flag any (measure, stave, voice) whose beats sum to more whole-note
+    duration than its time signature can hold. `ts` is 'omit if unchanged'
+    (§7.6) so it carries forward across measures. Doesn't flag under-capacity
+    measures — pickups (anacrusis) are legitimately short by design; only
+    overflow (schema-invisible "too many notes in a measure") is an error."""
+    ts = None
+    for m in data.get("measures", []) or []:
+        m_ts = m.get("ts")
+        if isinstance(m_ts, list) and len(m_ts) == 2:
+            ts = m_ts
+        if not ts or not isinstance(ts[0], (int, float)) or not ts[1]:
+            continue  # capacity unknown (no ts seen yet) — nothing to compare against
+        capacity = ts[0] / ts[1]
+        idx = m.get("idx")
+        for stave_id, stave in (m.get("staves") or {}).items():
+            for v in stave.get("voices", []) or []:
+                total = sum(_beat_whole_notes(b) for b in v.get("beats", []) or [])
+                if total > capacity + 1e-6:
+                    rep.err(
+                        f"{f}: measure {idx} stave {stave_id!r} voice {v.get('v')}: "
+                        f"beats sum to {total:.3g} whole note(s) but time signature "
+                        f"{ts[0]}/{ts[1]} only holds {capacity:.3g}"
+                    )
 
 
 def _monotonic(rep: ref.Report, f: str, kind: str, items: list, key: str) -> None:
