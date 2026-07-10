@@ -153,4 +153,11 @@ python test_routes.py       # backend: enumeration, library + upload validation,
 
 ## License
 
-MIT (see `LICENSE`). The vendored spec under `vendor/feedpak-spec/` carries its own licenses.
+AGPL-3.0-only (see `LICENSE`) — matching feedBack core, since this plugin is authored by and
+lives with the rest of the feedBack ecosystem; no separate license for the validator.
+
+`vendor/feedpak-spec/` is a third-party dependency, not our code — it stays under its own
+upstream terms regardless of this plugin's license: `LICENSE` (CC0-1.0, the spec document +
+schemas) and `LICENSE-CODE` (MIT, the reference validator), per `VENDOR.txt`'s pin. AGPL and
+MIT/CC0 are compatible for inclusion — the vendored files keep their own notices and license,
+only this plugin's own code (`fpvalidate.py`, `routes.py`, `screen.js`, etc.) is AGPL-3.0-only.
