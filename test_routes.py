@@ -8,6 +8,7 @@ validated). Run: python test_routes.py  (needs fastapi + httpx installed).
 """
 import io
 import logging
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -26,11 +27,14 @@ def _load_sibling(name):
 
 
 def _context():
+    # No get_sloppak_cache_dir: /packs is library-only (feedback: a pack once
+    # opened gets an extracted working copy in sloppak_cache/ under a
+    # flattened name, which showed up as a confusing duplicate of the same
+    # pack already in the library) — routes.py must not need this key at all.
     return {
         "log": logging.getLogger("test"),
         "load_sibling": _load_sibling,
         "get_dlc_dir": lambda: str(EXAMPLES),      # examples/ has no sloppak/ subdir
-        "get_sloppak_cache_dir": lambda: str(EXAMPLES),
     }
 
 
@@ -47,6 +51,24 @@ assert {"minimal.feedpak", "extended.feedpak"} <= names, packs
 assert all(set(p) == {"id", "name", "source"} for p in packs), "leaked fields"
 assert resp["total"] == len(packs), resp
 by_name = {p["name"]: p["id"] for p in packs}
+
+# Library-only: even if a host still passes get_sloppak_cache_dir, a pack
+# living only under the cache root must NOT be enumerated — only the DLC
+# library, to avoid the extracted-working-copy duplicates users were seeing.
+with tempfile.TemporaryDirectory() as t:
+    dlc_only, cache_only = Path(t) / "dlc", Path(t) / "cache"
+    dlc_only.mkdir(); cache_only.mkdir()
+    (dlc_only / "in_library.feedpak").write_bytes(b"x")
+    (cache_only / "in_cache_only.feedpak").write_bytes(b"x")
+    iso_app = FastAPI()
+    routes.setup(iso_app, {
+        "log": logging.getLogger("test-iso"),
+        "load_sibling": _load_sibling,
+        "get_dlc_dir": lambda: str(dlc_only),
+        "get_sloppak_cache_dir": lambda: str(cache_only),  # must be ignored
+    })
+    iso_names = {p["name"] for p in TestClient(iso_app).get(f"{BASE}/packs").json()["items"]}
+    assert iso_names == {"in_library.feedpak"}, iso_names
 
 # search narrows by name (case-insensitive substring) — the interface a user
 # with a large library relies on instead of scrolling a giant checkbox list.

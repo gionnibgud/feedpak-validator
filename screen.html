@@ -6,11 +6,17 @@
   </header>
 
   <div class="fbv-controls">
-    <label class="fbv-toggle">
-      <input type="checkbox" id="fbv-strict"> Strict
+    <div class="fbv-controls-left">
+      <button type="button" id="fbv-refresh" class="fbv-btn">Refresh library</button>
+      <button type="button" id="fbv-validate" class="fbv-btn fbv-btn-primary">Validate selected</button>
+    </div>
+    <label class="fbv-switch-row">
+      <span class="fbv-switch-label">Strict</span>
+      <span class="fbv-switch">
+        <input type="checkbox" id="fbv-strict">
+        <span class="fbv-switch-track"></span>
+      </span>
     </label>
-    <button type="button" id="fbv-refresh" class="fbv-btn">Refresh library</button>
-    <button type="button" id="fbv-validate" class="fbv-btn fbv-btn-primary">Validate selected</button>
   </div>
 
   <div class="fbv-cols">

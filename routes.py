@@ -55,8 +55,11 @@ def setup(app, context):
     router = APIRouter(prefix="/api/plugins/feedback-validator")
 
     def _roots() -> list[tuple[str, Path]]:
-        """(source-label, dir) pairs to scan for packs. Guarded — any of these
-        may be absent depending on host config."""
+        """(source-label, dir) pairs to scan for packs. Library only — the
+        sloppak_cache/ extraction cache is deliberately excluded: any pack
+        that's been opened once gets an unpacked working copy there under a
+        flattened name (see lib/sloppak.py resolve_source_dir), which showed
+        up as a confusing duplicate of the same pack already in the library."""
         out: list[tuple[str, Path]] = []
         try:
             dlc = Path(context["get_dlc_dir"]())
@@ -64,12 +67,6 @@ def setup(app, context):
                 if cand.is_dir():
                     out.append(("library", cand))
                     break
-        except Exception:
-            pass
-        try:
-            cache = Path(context["get_sloppak_cache_dir"]())
-            if cache.is_dir():
-                out.append(("cache", cache))
         except Exception:
             pass
         return out

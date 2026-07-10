@@ -171,10 +171,7 @@
             });
             const nm = document.createElement('span');
             nm.textContent = p.name;
-            const src = document.createElement('span');
-            src.className = 'fbv-src';
-            src.textContent = p.source;
-            row.append(cb, nm, src);
+            row.append(cb, nm);
             box.appendChild(row);
         }
         if (note) {

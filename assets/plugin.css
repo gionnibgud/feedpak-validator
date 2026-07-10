@@ -9,8 +9,25 @@
 .fbv-root code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .9em; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
 
-.fbv-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-.fbv-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.fbv-controls { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.fbv-controls-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* iOS-style switch — plain-CSS equivalent of feedBack's settings toggle
+   (see plugins/tuner/settings.html: sr-only checkbox + peer track/thumb),
+   reproduced here without Tailwind since this plugin ships no Tailwind build. */
+.fbv-switch-row { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.fbv-switch-label { font-size: 13px; color: #d8dde6; }
+.fbv-switch { position: relative; display: inline-flex; flex: none; }
+.fbv-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.fbv-switch-track { width: 36px; height: 20px; background: #374151; border-radius: 999px;
+  position: relative; transition: background-color .15s ease; }
+.fbv-switch-track::after { content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform .15s ease; }
+.fbv-switch input:checked + .fbv-switch-track { background: #4080e0; }
+.fbv-switch input:checked + .fbv-switch-track::after { transform: translateX(16px); }
+.fbv-switch input:focus-visible + .fbv-switch-track { outline: 2px solid #4080e0; outline-offset: 2px; }
+
 .fbv-btn { background: #2a3040; color: #d8dde6; border: 1px solid #3a4256;
   padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
 .fbv-btn:hover { background: #333a4d; }
@@ -36,7 +53,6 @@
 .fbv-packs { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
 .fbv-pack { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
 .fbv-pack:hover { background: rgba(255,255,255,.05); }
-.fbv-src { margin-left: auto; font-size: 11px; color: #7d8698; text-transform: uppercase; letter-spacing: .04em; }
 
 .fbv-drop { border: 1.5px dashed #3a4256; border-radius: 8px; padding: 28px 12px;
   text-align: center; color: #9aa3b2; cursor: pointer; transition: border-color .12s, background .12s; }
