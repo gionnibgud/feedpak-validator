@@ -117,7 +117,11 @@ def setup(app, context):
     async def validate_library(request: Request):
         body = await request.json()
         ids = body.get("ids") or []
-        strict = bool(body.get("strict", False))
+        # Default strict: basic is spec-conformance only and misses things like
+        # notation measures that overflow their time signature (feedback: a
+        # schema-valid pack that still passed basic looked like a clean bill of
+        # health). A caller wanting the looser check opts in with strict:false.
+        strict = bool(body.get("strict", True))
         if not isinstance(ids, list):
             return JSONResponse({"error": "ids must be a list"}, status_code=400)
         if len(ids) > _MAX_VALIDATE_BATCH:
@@ -152,7 +156,7 @@ def setup(app, context):
 
     @router.post("/validate-upload")
     async def validate_upload(files: list[UploadFile] = File(...),
-                              strict: bool = Form(False)):
+                              strict: bool = Form(True)):  # see /validate — default strict
         results = []
         level = "strict" if strict else "basic"
         for uf in files:
