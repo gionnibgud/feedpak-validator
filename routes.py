@@ -87,6 +87,10 @@ def setup(app, context):
                     })
         return packs
 
+    @router.get("/spec-info")
+    def spec_info():
+        return JSONResponse(fp.spec_info())
+
     @router.get("/packs")
     def list_packs(q: str = "", limit: int = _DEFAULT_PACK_LIMIT, offset: int = 0):
         # ponytail: rescans the filesystem on every call rather than caching —

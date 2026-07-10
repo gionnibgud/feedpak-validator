@@ -182,6 +182,24 @@
         updateSelectedCount();
     }
 
+    async function loadSpecInfo() {
+        const el = $('fbv-spec-version');
+        if (!el) return;
+        try {
+            const info = await _post('/spec-info', {});
+            if (!info.tag) { return; }   // VENDOR.txt missing/unparsable — say nothing rather than guess
+            el.textContent = `Reference: feedpak-spec ${info.tag}`;
+            if (info.repo && info.commit) {
+                const a = document.createElement('a');
+                a.href = `${info.repo}/tree/${info.commit}`;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.textContent = ` (${info.commit.slice(0, 7)})`;
+                el.appendChild(a);
+            }
+        } catch (e) { /* purely informational — a failed fetch just leaves the line blank */ }
+    }
+
     async function loadPacks(query = '') {
         const box = $('fbv-packs');
         if (!box) return;
@@ -262,6 +280,7 @@
             runUpload(e.dataTransfer.files);
         });
 
+        loadSpecInfo();
         loadPacks('');
     }
 

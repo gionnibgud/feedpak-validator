@@ -55,6 +55,28 @@ def _load_ref():
     return mod
 
 
+def spec_info() -> dict:
+    """Parse vendor/feedpak-spec/VENDOR.txt into {repo, tag, commit} — what
+    basic (and the closed-world patches strict layers on top of) is actually
+    checking against. For display (e.g. the plugin UI), not validation.
+    Best-effort: a missing or reformatted VENDOR.txt yields None fields rather
+    than raising, since this is metadata, not a correctness path."""
+    info = {"repo": None, "tag": None, "commit": None}
+    try:
+        text = (SPEC / "VENDOR.txt").read_text(encoding="utf-8")
+    except OSError:
+        return info
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Vendored from "):
+            info["repo"] = line[len("Vendored from "):].strip()
+        elif line.startswith("tag:"):
+            info["tag"] = line.split(":", 1)[1].strip()
+        elif line.startswith("commit:"):
+            info["commit"] = line.split(":", 1)[1].strip()
+    return info
+
+
 ref = _load_ref()  # the reference validator (basic level)
 
 try:

@@ -43,6 +43,10 @@ routes.setup(app, _context())
 client = TestClient(app)
 BASE = "/api/plugins/feedback-validator"
 
+# /spec-info — the pinned reference version shown on the plugin UI.
+info = client.get(f"{BASE}/spec-info").json()
+assert info["tag"] == "v1.14.0" and info["commit"] and info["repo"], info
+
 # /packs — both example packs discovered, no server paths leaked.
 resp = client.get(f"{BASE}/packs").json()
 packs = resp["items"]

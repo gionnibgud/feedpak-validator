@@ -8,6 +8,13 @@ import json, tempfile, yaml, zipfile
 from pathlib import Path
 import fpvalidate as fp
 
+# spec_info() surfaces what basic is actually checking against (VENDOR.txt's
+# pin) for display in the plugin UI — must match the pin this repo ships.
+info = fp.spec_info()
+assert info["tag"] == "v1.14.0", info
+assert info["commit"] and len(info["commit"]) == 40, info
+assert info["repo"] and info["repo"].startswith("https://"), info
+
 
 def _zip(src: Path, dest: Path):
     """Zip a pack dir into a *.feedpak archive with manifest.yaml at the root."""

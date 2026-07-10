@@ -6,6 +6,9 @@
 .fbv-head { margin-bottom: 20px; }
 .fbv-title { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
 .fbv-sub { color: #9aa3b2; margin: 0; }
+.fbv-spec-version { color: #7d8698; font-size: 12px; margin: 6px 0 0; }
+.fbv-spec-version a { color: #4080e0; text-decoration: none; }
+.fbv-spec-version a:hover { text-decoration: underline; }
 .fbv-root code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .9em; background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
 
