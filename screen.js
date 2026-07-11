@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // feedback-validator — validates .feedpak packages in-app and exposes a
 // window.feedBackValidator service other plugins (e.g. the editor) can call.
 (function () {

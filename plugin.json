@@ -3,6 +3,7 @@
   "name": "Feedpak Validator",
   "version": "0.1.0",
   "private": false,
+  "license": "AGPL-3.0-only",
   "description": "Validate .feedpak packages against the spec, in-app or from other plugins.",
   "category": "tools",
   "icon": "✓",

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-only
 """feedback-validator plugin — routes.py
 
 Surfaces the vendored feedpak validator (fpvalidate.py) as an in-app HTTP
