@@ -9,15 +9,41 @@
   strict  everything basic checks, PLUS the invariants the spec's own schemas
           can't express (they use additionalProperties:true and few required):
             - unknown keys rejected (manifest + arrangements, prose-aware)
-            - arrangement/stem id uniqueness
-            - at most one default stem
-            - note.string index within the tuning
+            - arrangement/stem/lyric-track/rig/drum-kit-piece/notation-stave id
+              uniqueness
+            - at most one default stem (accepting true/false/on/off/yes/no)
+            - note/chord-note.string index within the effective tuning
+              (manifest tuning overrides the arrangement JSON's), including
+              inside phrases[].levels[]
             - handshape.chord_id / chord.id index within templates
-            - note/chord/beat/section/anchor/tempo times non-decreasing
+            - arrangement tuning length is 4–8 strings
+            - chord template frets/fingers arrays match the string count;
+              fingers are -1..4
+            - note/chord/beat/section/anchor/tempo/bnv-curve times
+              non-decreasing, incl. inside phrases[].levels[]
             - handshape/phrase spans have positive length
-            - lyric_tracks side-files exist (validate.py never opens them)
+            - song_timeline.json / tones.changes / keys.json / harmony.json /
+              drum_tab.json hits / rigs.json automation points are time-ordered
+            - lyric_tracks side-files exist and schema-validate (validate.py
+              never opens them); lyric_tracks[].stem resolves to a stem id
+            - tones.base_rig / tones.changes[].rig resolve against rigs.json
+            - rigs.json: graph edges/nodes resolve to declared nodes/blocks;
+              nam/ir realization refs are safe relative paths or URIs
             - notation_<id>.json measures don't overflow their time signature
-              (voice beat-durations, incl. dot/tuplet, summed against ts)
+              (voice beat-durations, incl. dot/tuplet, summed against ts);
+              beat_groups sums equal the time signature numerator; measure
+              staves resolve to declared staves[].id; measures are ordered
+            - lyrics.json / lyric_tracks entries: a bare "-"/"+" (with no
+              syllable text) is rejected
+            - a .jsonc arrangement (comments) doesn't crash strict
+
+          plus warnings (SHOULD-level, don't fail the pack):
+            - no OGG/WAV (or PCM/Vorbis-codec) baseline stem — not portable
+            - a note/chord-note carries a bend shape (bt/bnv) but bn is 0
+            - a lyric_tracks kind isn't original/transliteration/translation,
+              or `lyrics` doesn't point at the kind:original track's file
+            - a drum hit's piece id is outside the closed v1 vocabulary
+            - a note's fret exceeds 24
 
 PACK is a *.feedpak/ directory or a *.feedpak zip archive; both levels handle both.
 
