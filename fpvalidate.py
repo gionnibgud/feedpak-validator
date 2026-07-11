@@ -142,79 +142,164 @@ def _strict_schema_errors(manifest: dict, root: Path, rep: ref.Report) -> None:
 
     av = _closed_arrangement_validator()
     for i, arr in enumerate(manifest.get("arrangements", []) or []):
+        if not isinstance(arr, dict):
+            continue
         f = arr.get("file")
         if f and (root / f).is_file():
-            data = json.loads((root / f).read_text(encoding="utf-8"))
+            data = _read_json(root, f)
+            if data is None:
+                continue  # malformed JSON — basic already reports it
             for e in av.iter_errors(data):
                 rep.err(f"{f} [strict]: {_loc(e)}: {e.message}")
+
+
+def _stem_default(v: object) -> bool:
+    """§5.3: readers MUST also accept the case-insensitive strings
+    true/false, on/off, yes/no for `default`, not just a real boolean."""
+    return v is True or (isinstance(v, str) and v.lower() in ("true", "on", "yes"))
 
 
 def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
     arrs = manifest.get("arrangements", []) or []
     stems = manifest.get("stems", []) or []
 
-    _dupes(rep, "arrangement id", [a.get("id") for a in arrs])
-    _dupes(rep, "stem id", [s.get("id") for s in stems])
+    _dupes(rep, "arrangement id", [a.get("id") for a in arrs if isinstance(a, dict)])
+    _dupes(rep, "stem id", [s.get("id") for s in stems if isinstance(s, dict)])
 
-    if sum(1 for s in stems if s.get("default")) > 1:
+    if sum(1 for s in stems if isinstance(s, dict) and _stem_default(s.get("default"))) > 1:
         rep.err("more than one stem marked default:true")
 
-    # lyric_tracks side-files: validate.py never opens these (PLAN.MD:107)
+    # lyric_tracks side-files: validate.py never opens these (PLAN.MD:107).
+    # Also schema-validate their contents against the plain (not closed-world)
+    # lyrics schema — basic only ever validates the single `lyrics` pointer.
+    lyrics_validator = Draft202012Validator(_load_raw("lyrics.schema.json"))
     for i, t in enumerate(manifest.get("lyric_tracks", []) or []):
+        if not isinstance(t, dict):
+            continue
         f = t.get("file")
-        if f and not (root / f).is_file():
+        if not f:
+            continue
+        if not (root / f).is_file():
             rep.err(f"lyric_tracks[{i}].file missing: {f}")
+            continue
+        data = _read_json(root, f)
+        if data is None:
+            continue  # malformed JSON — not this check's job
+        for e in lyrics_validator.iter_errors(data):
+            rep.err(f"{f} [strict]: {_loc(e)}: {e.message}")
 
     for a in arrs:
+        if not isinstance(a, dict):
+            continue
         f = a.get("file")
         if not f or not (root / f).is_file():
             continue
-        d = json.loads((root / f).read_text(encoding="utf-8"))
-        nstr = len(d.get("tuning", [])) or 6
-        ntpl = len(d.get("templates", []))   # chord_id / chord.id index into templates
-        for n in d.get("notes", []):
-            s = n.get("s")
-            if isinstance(s, int) and not (0 <= s < nstr):
-                rep.err(f"{f}: note.s={s} out of range for {nstr}-string tuning")
-        for h in d.get("handshapes", []):
-            cid = h.get("chord_id")
-            if isinstance(cid, int) and not (0 <= cid < ntpl):
-                rep.err(f"{f}: handshape.chord_id={cid} out of range (templates=[0,{ntpl}))")
-        for c in d.get("chords", []):
-            cid = c.get("id")
-            if isinstance(cid, int) and not (0 <= cid < ntpl):
-                rep.err(f"{f}: chord.id={cid} out of range (templates=[0,{ntpl}))")
+        d = _read_json(root, f)
+        if not isinstance(d, dict):
+            continue
 
-        # time ordering: these arrays are authored in time order; flag the first
-        # strictly-decreasing step. Shared timestamps are legal (many objects at
-        # the same t), so compare with '<', not '<='.
-        _monotonic(rep, f, "notes", d.get("notes", []), "t")
-        _monotonic(rep, f, "chords", d.get("chords", []), "t")
-        _monotonic(rep, f, "anchors", d.get("anchors", []), "time")
-        _monotonic(rep, f, "beats", d.get("beats", []), "time")
-        _monotonic(rep, f, "sections", d.get("sections", []), "time")
-        _monotonic(rep, f, "tempos", d.get("tempos", []), "time")
-        # spans must have positive length.
-        for kind, span in (("handshapes", d.get("handshapes", [])),
-                           ("phrases", d.get("phrases", []))):
-            for j, s in enumerate(span):
-                a, b = s.get("start_time"), s.get("end_time")
-                if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b <= a:
-                    rep.err(f"{f}: {kind}[{j}] end_time {b} <= start_time {a}")
-                    break
+        # §5.2: manifest-level tuning overrides the arrangement JSON's.
+        mtuning = a.get("tuning")
+        jtuning = d.get("tuning")
+        tuning = mtuning if isinstance(mtuning, list) and mtuning else (
+            jtuning if isinstance(jtuning, list) else [])
+        nstr = len(tuning) or 6
+        ntpl = len(d.get("templates", []) or [])   # chord_id / chord.id index into templates
+
+        _check_chart_arrays(rep, f, d, nstr, ntpl)
+        for i, ph in enumerate(d.get("phrases", []) or []):
+            if not isinstance(ph, dict):
+                continue
+            for j, lvl in enumerate(ph.get("levels", []) or []):
+                if not isinstance(lvl, dict):
+                    continue
+                _check_chart_arrays(rep, f, lvl, nstr, ntpl, where=f"phrases[{i}].levels[{j}]: ")
+
+        # song-level-ish arrays that only ever live at chart top level, plus
+        # the phrases[] span check — levels don't carry phrases/beats/etc.
+        _monotonic(rep, f, "beats", d.get("beats", []) or [], "time")
+        _monotonic(rep, f, "sections", d.get("sections", []) or [], "time")
+        _monotonic(rep, f, "tempos", d.get("tempos", []) or [], "time")
+        for j, s in enumerate(d.get("phrases", []) or []):
+            if not isinstance(s, dict):
+                continue
+            a2, b2 = s.get("start_time"), s.get("end_time")
+            if isinstance(a2, (int, float)) and isinstance(b2, (int, float)) and b2 <= a2:
+                rep.err(f"{f}: phrases[{j}] end_time {b2} <= start_time {a2}")
+                break
 
     # notation_<id>.json (§7.6): a per-arrangement side-file, not the `file`
     # loop above — a notation-only arrangement MAY omit `file` entirely, so
     # this runs independent of the `if not f` skip.
     for a in arrs:
+        if not isinstance(a, dict):
+            continue
         nf = a.get("notation")
         if not nf or not (root / nf).is_file():
             continue
-        try:
-            ndata = json.loads((root / nf).read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        ndata = _read_json(root, nf)
+        if not isinstance(ndata, dict):
             continue  # malformed JSON is already a basic-level schema failure
         _check_notation_measures(rep, nf, ndata)
+
+    # song_timeline.json (§7.4): tempos/time_signatures/beats/sections are
+    # each independently time-ordered.
+    stl = manifest.get("song_timeline")
+    if isinstance(stl, str) and (root / stl).is_file():
+        st = _read_json(root, stl)
+        if isinstance(st, dict):
+            _monotonic(rep, stl, "tempos", st.get("tempos", []) or [], "time")
+            _monotonic(rep, stl, "time_signatures", st.get("time_signatures", []) or [], "time")
+            _monotonic(rep, stl, "beats", st.get("beats", []) or [], "time")
+            _monotonic(rep, stl, "sections", st.get("sections", []) or [], "time")
+
+
+def _check_chart_arrays(rep: ref.Report, f: str, d: dict, nstr: int, ntpl: int, where: str = "") -> None:
+    """Range/order/span checks shared by an arrangement's top level and each
+    phrase level. `where` prefixes locations (e.g. "phrases[2].levels[0]: ")."""
+    for n in d.get("notes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        s = n.get("s")
+        if isinstance(s, int) and not (0 <= s < nstr):
+            rep.err(f"{f}: {where}note.s={s} out of range for {nstr}-string tuning")
+    for c in d.get("chords", []) or []:
+        if not isinstance(c, dict):
+            continue
+        for cn in c.get("notes", []) or []:
+            if not isinstance(cn, dict):
+                continue
+            s = cn.get("s")
+            if isinstance(s, int) and not (0 <= s < nstr):
+                rep.err(f"{f}: {where}note.s={s} out of range for {nstr}-string tuning")
+    for h in d.get("handshapes", []) or []:
+        if not isinstance(h, dict):
+            continue
+        cid = h.get("chord_id")
+        if isinstance(cid, int) and not (0 <= cid < ntpl):
+            rep.err(f"{f}: {where}handshape.chord_id={cid} out of range (templates=[0,{ntpl}))")
+    for c in d.get("chords", []) or []:
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("id")
+        if isinstance(cid, int) and not (0 <= cid < ntpl):
+            rep.err(f"{f}: {where}chord.id={cid} out of range (templates=[0,{ntpl}))")
+
+    # time ordering: these arrays are authored in time order; flag the first
+    # strictly-decreasing step. Shared timestamps are legal (many objects at
+    # the same t), so compare with '<', not '<='.
+    _monotonic(rep, f, f"{where}notes", d.get("notes", []) or [], "t")
+    _monotonic(rep, f, f"{where}chords", d.get("chords", []) or [], "t")
+    _monotonic(rep, f, f"{where}anchors", d.get("anchors", []) or [], "time")
+
+    # spans must have positive length.
+    for j, s in enumerate(d.get("handshapes", []) or []):
+        if not isinstance(s, dict):
+            continue
+        a, b = s.get("start_time"), s.get("end_time")
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b <= a:
+            rep.err(f"{f}: {where}handshapes[{j}] end_time {b} <= start_time {a}")
+            break
 
 
 def _beat_whole_notes(b: dict) -> float:
@@ -247,6 +332,8 @@ def _check_notation_measures(rep: ref.Report, f: str, data: dict) -> None:
     overflow (schema-invisible "too many notes in a measure") is an error."""
     ts = None
     for m in data.get("measures", []) or []:
+        if not isinstance(m, dict):
+            continue
         m_ts = m.get("ts")
         if isinstance(m_ts, list) and len(m_ts) == 2:
             ts = m_ts
@@ -255,8 +342,12 @@ def _check_notation_measures(rep: ref.Report, f: str, data: dict) -> None:
         capacity = ts[0] / ts[1]
         idx = m.get("idx")
         for stave_id, stave in (m.get("staves") or {}).items():
+            if not isinstance(stave, dict):
+                continue
             for v in stave.get("voices", []) or []:
-                total = sum(_beat_whole_notes(b) for b in v.get("beats", []) or [])
+                if not isinstance(v, dict):
+                    continue
+                total = sum(_beat_whole_notes(b) for b in v.get("beats", []) or [] if isinstance(b, dict))
                 if total > capacity + 1e-6:
                     rep.err(
                         f"{f}: measure {idx} stave {stave_id!r} voice {v.get('v')}: "
@@ -266,9 +357,13 @@ def _check_notation_measures(rep: ref.Report, f: str, data: dict) -> None:
 
 
 def _monotonic(rep: ref.Report, f: str, kind: str, items: list, key: str) -> None:
-    """Flag the first strictly-decreasing step in items[*][key] (one error per array)."""
+    """Flag the first strictly-decreasing step in items[*][key] (one error per array).
+    Non-dict items are skipped rather than raising — malformed entries are
+    already a basic-level schema concern."""
     prev = None
     for j, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
         v = it.get(key)
         if not isinstance(v, (int, float)):
             continue
@@ -279,8 +374,15 @@ def _monotonic(rep: ref.Report, f: str, kind: str, items: list, key: str) -> Non
 
 
 def _dupes(rep: ref.Report, label: str, ids: list) -> None:
+    """Report each id that appears more than once. Unhashable ids (malformed
+    data — e.g. a list/dict where a string was expected) are skipped rather
+    than raising; that's a basic-level schema concern, not this check's job."""
     seen, dup = set(), set()
     for i in ids:
+        try:
+            hash(i)
+        except TypeError:
+            continue
         if i in seen:
             dup.add(i)
         seen.add(i)
@@ -290,6 +392,17 @@ def _dupes(rep: ref.Report, label: str, ids: list) -> None:
 
 def _load_raw(name: str) -> dict:
     return json.loads((SPEC / "schemas" / name).read_text(encoding="utf-8"))
+
+
+def _read_json(root: Path, rel: str):
+    """Read a pack-relative JSON/JSONC file for strict checks. Returns the parsed
+    value or None — malformed/missing files are basic-level errors already, and
+    .jsonc (spec-legal for hand-edited packs, §6/§7) must not crash strict."""
+    try:
+        raw = (root / rel).read_text(encoding="utf-8")
+        return ref._parse_jsonc(raw) if rel.endswith(".jsonc") else json.loads(raw)
+    except (OSError, ValueError):
+        return None
 
 
 def _loc(e) -> str:

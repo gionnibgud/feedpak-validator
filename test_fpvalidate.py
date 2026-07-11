@@ -45,22 +45,61 @@ def _notation_pack(root: Path, measures):
 
 
 def _pack(root: Path, manifest_extra=None, note_s=0, chord_id=0, note_extra=None,
-          notes=None, hs_end=2.0):
+          notes=None, hs_end=2.0, chords=None, phrases=None, arr_extra=None,
+          json_tuning=None, stems=None, song_timeline=None, lyric_tracks=None):
     (root / "arrangements").mkdir(parents=True)
     (root / "stems").mkdir()
     (root / "stems" / "full.ogg").write_bytes(b"x")
     note = {"t": 1.0, "s": note_s, "f": 0}
     note.update(note_extra or {})
-    arr = {"name": "Lead", "tuning": [0]*6, "templates": [{"name": "A", "frets": [], "fingers": []}],
+    arr = {"name": "Lead", "tuning": json_tuning if json_tuning is not None else [0]*6,
+           "templates": [{"name": "A", "frets": [], "fingers": []}],
            "notes": notes if notes is not None else [note],
            "handshapes": [{"start_time": 1.0, "end_time": hs_end, "chord_id": chord_id, "arp": False}],
-           "chords": [{"t": 1.0, "id": 0, "notes": []}]}
+           "chords": chords if chords is not None else [{"t": 1.0, "id": 0, "notes": []}]}
+    if phrases is not None:
+        arr["phrases"] = phrases
     (root / "arrangements" / "lead.json").write_text(json.dumps(arr))
+    arr_entry = {"id": "lead", "name": "Lead", "file": "arrangements/lead.json", "type": "guitar"}
+    if arr_extra:
+        arr_entry.update(arr_extra)
     m = {"feedpak_version": "1.11.0", "title": "T", "artist": "A", "duration": 10.0,
-         "arrangements": [{"id": "lead", "name": "Lead", "file": "arrangements/lead.json", "type": "guitar"}],
-         "stems": [{"id": "full", "file": "stems/full.ogg", "default": True}]}
+         "arrangements": [arr_entry],
+         "stems": stems if stems is not None else [{"id": "full", "file": "stems/full.ogg", "default": True}]}
+    if song_timeline is not None:
+        (root / "song_timeline.json").write_text(json.dumps(song_timeline))
+        m["song_timeline"] = "song_timeline.json"
+    if lyric_tracks is not None:
+        entries = []
+        for lt in lyric_tracks:
+            entry = {k: v for k, v in lt.items() if k != "content"}
+            if "content" in lt:
+                (root / entry["file"]).write_text(json.dumps(lt["content"]))
+            entries.append(entry)
+        m["lyric_tracks"] = entries
     if manifest_extra:
         m.update(manifest_extra)
+    (root / "manifest.yaml").write_text(yaml.safe_dump(m))
+
+
+def _jsonc_pack(root: Path):
+    """A hand-edited pack whose arrangement file is .jsonc (spec-legal, §6/§8)
+    and actually contains a comment — must not crash strict (formerly did:
+    the strict layer used a raw json.loads with no comment-stripping)."""
+    (root / "arrangements").mkdir(parents=True)
+    (root / "stems").mkdir()
+    (root / "stems" / "full.ogg").write_bytes(b"x")
+    arr_text = (
+        "{\n"
+        "  // a hand-edited comment\n"
+        '  "name": "Lead", "tuning": [0,0,0,0,0,0], "templates": [],\n'
+        '  "notes": [{"t": 1.0, "s": 0, "f": 0}], "handshapes": [], "chords": []\n'
+        "}\n"
+    )
+    (root / "arrangements" / "lead.jsonc").write_text(arr_text)
+    m = {"feedpak_version": "1.11.0", "title": "T", "artist": "A", "duration": 10.0,
+         "arrangements": [{"id": "lead", "name": "Lead", "file": "arrangements/lead.jsonc", "type": "guitar"}],
+         "stems": [{"id": "full", "file": "stems/full.ogg", "default": True}]}
     (root / "manifest.yaml").write_text(yaml.safe_dump(m))
 
 
@@ -155,6 +194,85 @@ with tempfile.TemporaryDirectory() as t:
     r = fp.check(notcarry, strict=True)
     assert not r.ok, "ts must carry forward across measures that omit it"
     assert "measure 2" in "\n".join(r.errors), r.errors
+
+    # --- Phase 1 (Group A): holes in existing strict checks ---------------
+
+    # chord notes carry the note field set minus `t` (§6.3) — including `s`,
+    # which must be range-checked exactly like a standalone note's.
+    chordbad = Path(t) / "chordbad.feedpak"
+    _pack(chordbad, chords=[{"t": 1.0, "id": 0, "notes": [{"s": 99, "f": 0}]}])
+    assert fp.check(chordbad, strict=False).ok, "loose spec: basic must PASS an out-of-range chord note"
+    r = fp.check(chordbad, strict=True)
+    assert not r.ok, "strict must FAIL an out-of-range chord note"
+    assert "note.s=99" in "\n".join(r.errors), r.errors
+
+    # phrases[].levels[] (§6.7) carry their own notes/chords/anchors/handshapes
+    # — the schema doesn't shape-check `levels` at all, so this is basic-legal.
+    phrasebad = Path(t) / "phrasebad.feedpak"
+    _pack(phrasebad, phrases=[{
+        "start_time": 0.0, "end_time": 1.0, "max_difficulty": 1,
+        "levels": [{"difficulty": 0, "notes": [{"t": 0.5, "s": 99, "f": 0}],
+                    "chords": [], "anchors": [], "handshapes": []}],
+    }])
+    assert fp.check(phrasebad, strict=False).ok, "loose spec: basic must PASS a bad note inside phrases[].levels[]"
+    r = fp.check(phrasebad, strict=True)
+    assert not r.ok, "strict must FAIL a bad note inside phrases[].levels[]"
+    joined = "\n".join(r.errors)
+    assert "phrases[0].levels[0]" in joined and "note.s=99" in joined, joined
+
+    # §5.2: manifest-level tuning overrides the arrangement JSON's — a note
+    # legal for a 6-string JSON tuning can be out of range once the manifest
+    # narrows the arrangement to 4 strings.
+    tuningover = Path(t) / "tuningover.feedpak"
+    _pack(tuningover, note_s=5, json_tuning=[0] * 6, arr_extra={"tuning": [0, 0, 0, 0]})
+    assert fp.check(tuningover, strict=False).ok, \
+        "loose spec: basic doesn't cross-check note.s against tuning at all"
+    r = fp.check(tuningover, strict=True)
+    assert not r.ok, "strict must use the manifest's tuning override, not the arrangement JSON's"
+    assert "out of range for 4-string tuning" in "\n".join(r.errors), r.errors
+
+    # §5.3: `default` accepts case-insensitive true/false/on/off/yes/no, not
+    # just a real boolean — two stems both "off" must NOT look like two defaults.
+    stemsoff = Path(t) / "stemsoff.feedpak"
+    _pack(stemsoff, stems=[{"id": "full", "file": "stems/full.ogg", "default": "off"},
+                            {"id": "alt", "file": "stems/full.ogg", "default": "off"}])
+    assert fp.check(stemsoff, strict=True).ok, "two stems default:\"off\" must not false-positive"
+
+    stemson = Path(t) / "stemson.feedpak"
+    _pack(stemson, stems=[{"id": "full", "file": "stems/full.ogg", "default": "on"},
+                           {"id": "alt", "file": "stems/full.ogg", "default": "ON"}])
+    r = fp.check(stemson, strict=True)
+    assert not r.ok, "two stems default:\"on\"/\"ON\" must still trigger the more-than-one-default check"
+    assert "more than one stem marked default" in "\n".join(r.errors), r.errors
+
+    # song_timeline.json (§7.4): tempos/time_signatures/beats/sections are
+    # each independently time-ordered; validate.py schema-checks the file's
+    # shape but never sums or orders it, so descending beats is basic-legal.
+    stbad = Path(t) / "stbad.feedpak"
+    _pack(stbad, song_timeline={"version": 1, "beats": [
+        {"time": 2.0, "measure": 1}, {"time": 1.0, "measure": 2}]})
+    assert fp.check(stbad, strict=False).ok, "loose spec: basic must PASS descending song_timeline beats"
+    r = fp.check(stbad, strict=True)
+    assert not r.ok, "strict must FAIL descending song_timeline beats"
+    assert "song_timeline.json" in "\n".join(r.errors) and "not in time order" in "\n".join(r.errors), r.errors
+
+    # lyric_tracks[].file (§5.5): validate.py never opens these — only the
+    # single `lyrics` pointer gets schema-validated. Strict must now open and
+    # schema-check every track's content too.
+    ltbad = Path(t) / "ltbad.feedpak"
+    _pack(ltbad, lyric_tracks=[{"id": "en", "file": "lyrics_en.json", "language": "en",
+                                 "kind": "original", "content": [{"t": "x"}]}])
+    assert fp.check(ltbad, strict=False).ok, "loose spec: basic never opens lyric_tracks files"
+    r = fp.check(ltbad, strict=True)
+    assert not r.ok, "strict must schema-validate lyric_tracks file contents"
+    assert "lyrics_en.json" in "\n".join(r.errors), r.errors
+
+    # .jsonc arrangement (spec-legal, §6/§8): the strict layer used to read
+    # arrangement files with a raw json.loads and crash on the comment.
+    jsoncok = Path(t) / "jsoncok.feedpak"
+    _jsonc_pack(jsoncok)
+    assert fp.check(jsoncok, strict=False).ok, "a .jsonc arrangement must pass basic"
+    assert fp.check(jsoncok, strict=True).ok, "a .jsonc arrangement must not crash strict"
 
 # _explain(): every rule must match its own trigger text (each rule proven
 # reachable) and produce a DIFFERENT sentence from its neighbors (otherwise a
