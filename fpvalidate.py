@@ -159,6 +159,32 @@ def _stem_default(v: object) -> bool:
     return v is True or (isinstance(v, str) and v.lower() in ("true", "on", "yes"))
 
 
+# §5.3.2: extension -> resolved codec, when `codec` isn't given explicitly.
+_EXT_CODEC = {"ogg": "vorbis", "opus": "opus", "wav": "pcm", "mp3": "mp3", "flac": "flac"}
+_BASELINE_CODECS = {"vorbis", "pcm"}
+
+
+def _stem_codec(s: dict) -> str | None:
+    """§5.3.2 codec resolution: explicit `codec` (lowercased) overrides the
+    file extension; an unrecognized/missing extension resolves to None."""
+    codec = s.get("codec")
+    if isinstance(codec, str) and codec:
+        return codec.lower()
+    f = s.get("file")
+    if isinstance(f, str) and "." in f:
+        return _EXT_CODEC.get(f.rsplit(".", 1)[-1].lower())
+    return None
+
+
+# §7.5: closed piece-id vocabulary for v1; unknown ids MUST still round-trip
+# (a Reader renders them with a fallback), so this is a warning, not an error.
+_DRUM_VOCAB = {
+    "kick", "snare", "snare_xstick", "tom_hi", "tom_mid", "tom_low", "tom_floor",
+    "hh_closed", "hh_open", "hh_pedal", "stack", "crash_l", "crash_r", "splash",
+    "china", "ride", "ride_bell", "bell",
+}
+
+
 def _check_lyrics_suffix(rep: ref.Report, rel: str, data: list) -> None:
     """§7.1: a trailing '-' or '+' is a suffix on a real syllable, not a
     standalone entry — `w` being exactly '-' or '+' means the syllable text
@@ -186,19 +212,37 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
     if sum(1 for s in stems if isinstance(s, dict) and _stem_default(s.get("default"))) > 1:
         rep.err("more than one stem marked default:true")
 
+    # §5.3.2 (SHOULD): a distributable pack needs at least one OGG/WAV
+    # (resolved codec vorbis/pcm) baseline stem so a leaner Reader has
+    # something guaranteed-playable.
+    if stems and not any(_stem_codec(s) in _BASELINE_CODECS for s in stems if isinstance(s, dict)):
+        rep.warn("no baseline OGG/WAV stem — pack is not portable (spec §5.3.2)")
+
     # lyric_tracks side-files: validate.py never opens these (PLAN.MD:107).
     # Also schema-validate their contents against the plain (not closed-world)
     # lyrics schema — basic only ever validates the single `lyrics` pointer —
     # and apply the §7.1 standalone-suffix rule (2.8) to each track.
     stem_ids = {s.get("id") for s in stems if isinstance(s, dict) and isinstance(s.get("id"), str)}
     lyrics_validator = Draft202012Validator(_load_raw("lyrics.schema.json"))
-    for i, t in enumerate(manifest.get("lyric_tracks", []) or []):
+    original_files: set = set()
+    lyric_tracks_list = manifest.get("lyric_tracks", []) or []
+    for i, t in enumerate(lyric_tracks_list):
         if not isinstance(t, dict):
             continue
         f = t.get("file")
         stem_ref = t.get("stem")
         if isinstance(stem_ref, str) and stem_ref not in stem_ids:
             rep.err(f"lyric_tracks[{i}].stem {stem_ref!r} does not match any stems[].id")
+
+        # §5.5 (SHOULD): kind is one of the three canonical values — a Reader
+        # MUST accept any value but treats an unrecognized one as translation.
+        kind = t.get("kind")
+        if isinstance(kind, str) and kind not in ("original", "transliteration", "translation"):
+            rep.warn(f"lyric_tracks[{i}].kind {kind!r} is non-standard — "
+                      "readers will treat it as a translation")
+        if kind == "original" and isinstance(f, str):
+            original_files.add(f)
+
         if not f:
             continue
         if not (root / f).is_file():
@@ -218,6 +262,12 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
         ldata = _read_json(root, lyrics_rel)
         if ldata is not None:
             _check_lyrics_suffix(rep, lyrics_rel, ldata)
+
+    # §5.5 (SHOULD): when lyric_tracks is present, `lyrics` SHOULD point at
+    # the kind:original track's file, or a pre-1.11 Reader may show nothing.
+    if lyric_tracks_list and (not isinstance(lyrics_rel, str) or lyrics_rel not in original_files):
+        rep.warn("lyrics pointer does not name a kind:original track's file — "
+                  "pre-1.11 readers may show nothing")
 
     # --- side-files loaded once, reused across ordering / uniqueness /
     # dangling-ref checks. Missing pointer, missing file, or a parse failure
@@ -242,6 +292,16 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
             _monotonic(rep, drum_rel, "hits", drum_data.get("hits", []) or [], "t")
             _dupes(rep, "drum kit piece id",
                    [k.get("id") for k in drum_data.get("kit", []) or [] if isinstance(k, dict)])
+            # §7.5 (SHOULD): unknown piece-ids MUST still round-trip, so this
+            # is a warning — dedupe so a repeated id warns once.
+            seen_pieces: set = set()
+            for h in drum_data.get("hits", []) or []:
+                if not isinstance(h, dict):
+                    continue
+                p = h.get("p")
+                if isinstance(p, str) and p not in _DRUM_VOCAB and p not in seen_pieces:
+                    seen_pieces.add(p)
+                    rep.warn(f"{drum_rel}: drum piece id {p!r} is outside the v1 vocabulary")
         else:
             drum_data = None
 
@@ -361,6 +421,27 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
                 bnv = cn.get("bnv")
                 if isinstance(bnv, list) and bnv:
                     _monotonic(rep, f, f"chords[{ci}].notes[{ni}].bnv", bnv, "t")
+
+        # §6.2.1 (SHOULD NOT): bend-shape hints (bt/bnv) with no actual bend
+        # (bn absent/0) — first occurrence only, one warning per array.
+        # §6.2 (24 = max fret): first occurrence only, one warning per array.
+        bend_warned = fret_warned = False
+        for i, n in enumerate(d.get("notes", []) or []):
+            if not isinstance(n, dict):
+                continue
+            if not bend_warned:
+                bnv, bt = n.get("bnv"), n.get("bt")
+                has_shape = (isinstance(bnv, list) and bnv) or (isinstance(bt, int) and bt != 0)
+                if has_shape and not n.get("bn"):
+                    rep.warn(f"{f}: notes[{i}] carries bend shape (bt/bnv) but bn is 0")
+                    bend_warned = True
+            if not fret_warned:
+                fr = n.get("f")
+                if isinstance(fr, int) and fr > 24:
+                    rep.warn(f"{f}: notes[{i}].f={fr} exceeds fret 24")
+                    fret_warned = True
+            if bend_warned and fret_warned:
+                break
 
         # §6.9: tones.changes is time-sorted; base_rig/changes[].rig must
         # resolve against rigs.json.
@@ -773,6 +854,22 @@ _EXPLAIN: list[tuple[object, str]] = [
     (_has("is a bare", "standalone entries"),
      "A lyrics entry is just a join/line marker with no syllable text — the marker belongs "
      "at the end of a real syllable."),
+    (_has("no baseline OGG/WAV stem"),
+     "None of the audio files are in a universally-supported format, so some players may "
+     "have nothing they can play."),
+    (_has("carries bend shape", "bn is 0"),
+     "A note describes the shape of a string bend but its bend amount is zero — the shape "
+     "data will be ignored."),
+    (_has("is non-standard", "treat it as a translation"),
+     "A lyrics track has an unrecognized type label; players will fall back to treating it "
+     "as a translation."),
+    (_has("lyrics pointer does not name"),
+     "Older players that predate multi-track lyrics may not find any lyrics to display."),
+    (_has("outside the v1 vocabulary"),
+     "A drum hit uses a piece name this spec version doesn't define — it will render with "
+     "a generic fallback."),
+    (_has("exceeds fret 24"),
+     "A note sits above the 24th fret — beyond the fretboard of nearly every real instrument."),
 ]
 
 _EXPLAIN_FALLBACK = "This is a lower-level technical issue that could affect how the pack loads or displays."

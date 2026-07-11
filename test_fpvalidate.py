@@ -457,6 +457,55 @@ with tempfile.TemporaryDirectory() as t:
     r = fp.check(lyricsuffix, strict=True)
     assert not r.ok and "lyrics[0].w is a bare '-'" in "\n".join(r.errors), r.errors
 
+    # --- Phase 3 (Group C): SHOULD-level warnings --------------------------
+    # Warnings never fail rep.ok — only errors do.
+
+    # §5.3.2: a distributable pack needs at least one OGG/WAV baseline stem;
+    # an explicit codec override (here "mp3") wins over the .ogg extension.
+    mp3only = Path(t) / "mp3only.feedpak"
+    _pack(mp3only, stems=[{"id": "full", "file": "stems/full.ogg", "codec": "mp3", "default": True}])
+    r = fp.check(mp3only, strict=True)
+    assert r.ok, "a warning must not fail rep.ok"
+    assert "no baseline OGG/WAV stem" in "\n".join(r.warnings), r.warnings
+
+    # §6.2.1 (SHOULD NOT): a bend-shape hint (bnv) with no actual bend (bn=0).
+    bendhint = Path(t) / "bendhint.feedpak"
+    _pack(bendhint, notes=[{"t": 1.0, "s": 0, "f": 0, "bnv": [{"t": 0.0, "v": 0.0}]}])
+    r = fp.check(bendhint, strict=True)
+    assert r.ok
+    joined = "\n".join(r.warnings)
+    assert "carries bend shape" in joined and "bn is 0" in joined, joined
+
+    # §5.5: a non-standard lyric_tracks kind, and a `lyrics` pointer that
+    # doesn't name any kind:original track's file.
+    kindbad = Path(t) / "kindbad.feedpak"
+    _pack(kindbad, lyric_tracks=[{"id": "en", "file": "lyrics_en.json", "language": "en",
+                                   "kind": "dub", "content": []}])
+    r = fp.check(kindbad, strict=True)
+    assert r.ok
+    joined = "\n".join(r.warnings)
+    assert "lyric_tracks[0].kind 'dub' is non-standard" in joined, joined
+    assert "lyrics pointer does not name a kind:original track's file" in joined, joined
+
+    res = fp.validate(kindbad, strict=True)
+    assert len(res["warning_explanations"]) == len(res["warnings"]) == 2, res
+    assert all(e != fp._EXPLAIN_FALLBACK for e in res["warning_explanations"]), res
+
+    # §7.5: an unrecognized drum piece id (closed v1 vocabulary — warn, don't
+    # reject, since unknown ids MUST still round-trip).
+    drumvocab = Path(t) / "drumvocab.feedpak"
+    _pack(drumvocab, drum_tab={"version": 1, "hits": [{"t": 1.0, "p": "cowbell"}]})
+    r = fp.check(drumvocab, strict=True)
+    assert r.ok
+    assert "drum piece id 'cowbell' is outside the v1 vocabulary" in "\n".join(r.warnings), r.warnings
+
+    # §6.2: 24 is the max playable fret.
+    fretceil = Path(t) / "fretceil.feedpak"
+    _pack(fretceil, notes=[{"t": 1.0, "s": 0, "f": 25}])
+    r = fp.check(fretceil, strict=True)
+    assert r.ok
+    assert "notes[0].f=25 exceeds fret 24" in "\n".join(r.warnings), r.warnings
+
 # _explain(): every rule must match its own trigger text (each rule proven
 # reachable) and produce a DIFFERENT sentence from its neighbors (otherwise a
 # rule is dead weight — already covered by a broader one). An unmatched line
@@ -499,6 +548,13 @@ _EXPLAIN_CASES = [
     "notation_keys.json: measure 1: beat_groups sum to 6 but the time signature numerator is 4",
     "rigs.json: rigs[0] realization ref is not a safe relative path: '../x.nam'",
     "lyrics.json: lyrics[0].w is a bare '-' — join/line markers are suffixes on a syllable, not standalone entries",
+    # Phase 3 (Group C)
+    "no baseline OGG/WAV stem — pack is not portable (spec §5.3.2)",
+    "arrangements/lead.json: notes[0] carries bend shape (bt/bnv) but bn is 0",
+    "lyric_tracks[0].kind 'dub' is non-standard — readers will treat it as a translation",
+    "lyrics pointer does not name a kind:original track's file — pre-1.11 readers may show nothing",
+    "drum_tab.json: drum piece id 'cowbell' is outside the v1 vocabulary",
+    "arrangements/lead.json: notes[0].f=25 exceeds fret 24",
 ]
 explanations = [fp._explain(c) for c in _EXPLAIN_CASES]
 assert all(e != fp._EXPLAIN_FALLBACK for e in explanations), \
