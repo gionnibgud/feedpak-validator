@@ -69,6 +69,12 @@ from pathlib import Path
 # See vendor/feedpak-spec/VENDOR.txt for the exact source commit.
 SPEC = Path(__file__).resolve().parent / "vendor" / "feedpak-spec"
 
+# Decompression-bomb caps for zip packs: reject before extracting, using only
+# the central-directory metadata (entry count + declared uncompressed sizes) so
+# a crafted archive can't exhaust disk/inodes on the host.
+_MAX_ARCHIVE_ENTRIES = 100_000
+_MAX_ARCHIVE_UNCOMPRESSED = 2 * 1024**3  # 2 GiB
+
 
 def _load_ref():
     """Import the vendored reference validator by file path under a private name,
@@ -728,6 +734,15 @@ def check(pack: Path, strict: bool) -> ref.Report:
     elif pack.is_file() and zipfile.is_zipfile(pack):
         with tempfile.TemporaryDirectory() as tmp:
             with zipfile.ZipFile(pack) as zf:
+                # Decompression-bomb caps, checked from the central directory
+                # before any extraction (see _MAX_ARCHIVE_* above).
+                infos = zf.infolist()
+                if len(infos) > _MAX_ARCHIVE_ENTRIES:
+                    rep.err(f"archive has too many entries ({len(infos)} > "
+                            f"{_MAX_ARCHIVE_ENTRIES})")
+                if sum(i.file_size for i in infos) > _MAX_ARCHIVE_UNCOMPRESSED:
+                    rep.err(f"archive too large uncompressed "
+                            f"(> {_MAX_ARCHIVE_UNCOMPRESSED} bytes)")
                 for name in zf.namelist():
                     if (name.startswith("/") or ".." in Path(name).parts
                             or "\\" in name or ":" in name):
