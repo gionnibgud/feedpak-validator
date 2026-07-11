@@ -24,7 +24,7 @@ def _zip(src: Path, dest: Path):
                 zf.write(p, p.relative_to(src).as_posix())
 
 
-def _notation_pack(root: Path, measures):
+def _notation_pack(root: Path, measures, staves=None):
     """A minimal pack with one arrangement that has both a tab `file` (kept
     trivially valid) and a `notation` side-file, mirroring how real packs
     (e.g. the TGA_Full_07-06_Testing.feedpak bug report) pair the two."""
@@ -35,7 +35,8 @@ def _notation_pack(root: Path, measures):
            "notes": [{"t": 1.0, "s": 0, "f": 0}], "handshapes": [], "chords": []}
     (root / "arrangements" / "keys.json").write_text(json.dumps(arr))
     (root / "notation_keys.json").write_text(json.dumps({
-        "version": 1, "staves": [{"id": "rh", "clef": "G2"}], "measures": measures,
+        "version": 1, "staves": staves if staves is not None else [{"id": "rh", "clef": "G2"}],
+        "measures": measures,
     }))
     m = {"feedpak_version": "1.11.0", "title": "T", "artist": "A", "duration": 10.0,
          "arrangements": [{"id": "keys", "name": "Keys", "file": "arrangements/keys.json",
@@ -46,19 +47,23 @@ def _notation_pack(root: Path, measures):
 
 def _pack(root: Path, manifest_extra=None, note_s=0, chord_id=0, note_extra=None,
           notes=None, hs_end=2.0, chords=None, phrases=None, arr_extra=None,
-          json_tuning=None, stems=None, song_timeline=None, lyric_tracks=None):
+          json_tuning=None, stems=None, song_timeline=None, lyric_tracks=None,
+          templates=None, tones=None, drum_tab=None, rigs=None, keys=None,
+          harmony=None, lyrics=None):
     (root / "arrangements").mkdir(parents=True)
     (root / "stems").mkdir()
     (root / "stems" / "full.ogg").write_bytes(b"x")
     note = {"t": 1.0, "s": note_s, "f": 0}
     note.update(note_extra or {})
     arr = {"name": "Lead", "tuning": json_tuning if json_tuning is not None else [0]*6,
-           "templates": [{"name": "A", "frets": [], "fingers": []}],
+           "templates": templates if templates is not None else [{"name": "A", "frets": [], "fingers": []}],
            "notes": notes if notes is not None else [note],
            "handshapes": [{"start_time": 1.0, "end_time": hs_end, "chord_id": chord_id, "arp": False}],
            "chords": chords if chords is not None else [{"t": 1.0, "id": 0, "notes": []}]}
     if phrases is not None:
         arr["phrases"] = phrases
+    if tones is not None:
+        arr["tones"] = tones
     (root / "arrangements" / "lead.json").write_text(json.dumps(arr))
     arr_entry = {"id": "lead", "name": "Lead", "file": "arrangements/lead.json", "type": "guitar"}
     if arr_extra:
@@ -77,6 +82,16 @@ def _pack(root: Path, manifest_extra=None, note_s=0, chord_id=0, note_extra=None
                 (root / entry["file"]).write_text(json.dumps(lt["content"]))
             entries.append(entry)
         m["lyric_tracks"] = entries
+    for key, payload, fname in (("drum_tab", drum_tab, "drum_tab.json"),
+                                 ("rigs", rigs, "rigs.json"),
+                                 ("keys", keys, "keys.json"),
+                                 ("harmony", harmony, "harmony.json")):
+        if payload is not None:
+            (root / fname).write_text(json.dumps(payload))
+            m[key] = fname
+    if lyrics is not None:
+        (root / "lyrics.json").write_text(json.dumps(lyrics))
+        m["lyrics"] = "lyrics.json"
     if manifest_extra:
         m.update(manifest_extra)
     (root / "manifest.yaml").write_text(yaml.safe_dump(m))
@@ -274,6 +289,174 @@ with tempfile.TemporaryDirectory() as t:
     assert fp.check(jsoncok, strict=False).ok, "a .jsonc arrangement must pass basic"
     assert fp.check(jsoncok, strict=True).ok, "a .jsonc arrangement must not crash strict"
 
+    # --- Phase 2 (Group B): unchecked normative MUSTs ---------------------
+
+    # §5.2: tuning length must be 4..8 strings.
+    tun3 = Path(t) / "tun3.feedpak"
+    _pack(tun3, json_tuning=[0, 0, 0])
+    assert fp.check(tun3, strict=False).ok, "loose spec: the schema has no tuning length limit"
+    r = fp.check(tun3, strict=True)
+    assert not r.ok and "tuning has 3 strings" in "\n".join(r.errors), r.errors
+
+    tun9 = Path(t) / "tun9.feedpak"
+    _pack(tun9, json_tuning=[0] * 9)
+    r = fp.check(tun9, strict=True)
+    assert not r.ok and "tuning has 9 strings" in "\n".join(r.errors), r.errors
+
+    # §6.6: template frets/fingers length must match the string count; empty
+    # arrays (the default/absent case) must NOT trigger the check.
+    tplbad = Path(t) / "tplbad.feedpak"
+    _pack(tplbad, templates=[{"name": "A", "frets": [0, 0, 0], "fingers": [-1] * 6}])
+    assert fp.check(tplbad, strict=False).ok
+    r = fp.check(tplbad, strict=True)
+    assert not r.ok and "templates[0].frets has 3 entries for a 6-string tuning" in "\n".join(r.errors), r.errors
+
+    fingerbad = Path(t) / "fingerbad.feedpak"
+    _pack(fingerbad, templates=[{"name": "A", "frets": [0] * 6, "fingers": [7, 0, 0, 0, 0, 0]}])
+    assert fp.check(fingerbad, strict=False).ok
+    r = fp.check(fingerbad, strict=True)
+    assert not r.ok and "templates[0].fingers value 7 out of range (-1..4)" in "\n".join(r.errors), r.errors
+
+    # §6.2.1: bnv curve points must be non-descending.
+    bnvbad = Path(t) / "bnvbad.feedpak"
+    _pack(bnvbad, notes=[{"t": 1.0, "s": 0, "f": 0, "bn": 1.0,
+                           "bnv": [{"t": 0.5, "v": 1.0}, {"t": 0.1, "v": 0.0}]}])
+    assert fp.check(bnvbad, strict=False).ok
+    r = fp.check(bnvbad, strict=True)
+    joined = "\n".join(r.errors)
+    assert not r.ok and "bnv" in joined and "not in time order" in joined, joined
+
+    # §6.9: tones.changes is time-sorted.
+    tonesbad = Path(t) / "tonesbad.feedpak"
+    _pack(tonesbad, tones={"base": "Clean", "changes": [{"t": 2.0, "name": "A"}, {"t": 1.0, "name": "B"}]})
+    assert fp.check(tonesbad, strict=False).ok
+    r = fp.check(tonesbad, strict=True)
+    joined = "\n".join(r.errors)
+    assert not r.ok and "tones.changes" in joined and "not in time order" in joined, joined
+
+    # §7.7/§7.8: keys.json / harmony.json events are time-ordered.
+    keysbad = Path(t) / "keysbad.feedpak"
+    _pack(keysbad, keys={"version": 1, "events": [{"t": 2.0, "key": "Em"}, {"t": 1.0, "key": "G"}]})
+    assert fp.check(keysbad, strict=False).ok
+    r = fp.check(keysbad, strict=True)
+    assert not r.ok and "not in time order" in "\n".join(r.errors), r.errors
+
+    harmbad = Path(t) / "harmbad.feedpak"
+    _pack(harmbad, harmony={"version": 1, "events": [{"t": 2.0, "root": "G"}, {"t": 1.0, "root": "C"}]})
+    assert fp.check(harmbad, strict=False).ok
+    r = fp.check(harmbad, strict=True)
+    assert not r.ok and "not in time order" in "\n".join(r.errors), r.errors
+
+    # §7.5: drum hits are monotonic.
+    drumbad = Path(t) / "drumbad.feedpak"
+    _pack(drumbad, drum_tab={"version": 1, "hits": [{"t": 2.0, "p": "kick"}, {"t": 1.0, "p": "snare"}]})
+    assert fp.check(drumbad, strict=False).ok
+    r = fp.check(drumbad, strict=True)
+    joined = "\n".join(r.errors)
+    assert not r.ok and "hits" in joined and "not in time order" in joined, joined
+
+    # id uniqueness: rig id, drum kit piece id, lyric track id, notation stave id.
+    rigdup = Path(t) / "rigdup.feedpak"
+    _pack(rigdup, rigs={"version": 1, "rigs": [{"id": "a", "blocks": []}, {"id": "a", "blocks": []}]})
+    assert fp.check(rigdup, strict=False).ok
+    r = fp.check(rigdup, strict=True)
+    assert not r.ok and "duplicate rig id: 'a'" in "\n".join(r.errors), r.errors
+
+    kitdup = Path(t) / "kitdup.feedpak"
+    _pack(kitdup, drum_tab={"version": 1, "kit": [{"id": "kick"}, {"id": "kick"}], "hits": []})
+    assert fp.check(kitdup, strict=False).ok
+    r = fp.check(kitdup, strict=True)
+    assert not r.ok and "duplicate drum kit piece id: 'kick'" in "\n".join(r.errors), r.errors
+
+    ltdup = Path(t) / "ltdup.feedpak"
+    _pack(ltdup, lyric_tracks=[
+        {"id": "en", "file": "lyrics_en1.json", "language": "en", "kind": "original", "content": []},
+        {"id": "en", "file": "lyrics_en2.json", "language": "en", "kind": "translation", "content": []},
+    ])
+    assert fp.check(ltdup, strict=False).ok
+    r = fp.check(ltdup, strict=True)
+    assert not r.ok and "duplicate lyric track id: 'en'" in "\n".join(r.errors), r.errors
+
+    stavedup_measures = [{"idx": 1, "t": 0.0, "ts": [4, 4],
+                           "staves": {"rh": {"voices": [{"v": 1, "beats": _beats(1)}]}}}]
+    stavedup = Path(t) / "stavedup.feedpak"
+    _notation_pack(stavedup, stavedup_measures, staves=[{"id": "rh", "clef": "G2"}, {"id": "rh", "clef": "F4"}])
+    assert fp.check(stavedup, strict=False).ok
+    r = fp.check(stavedup, strict=True)
+    assert not r.ok and "duplicate notation stave id: 'rh'" in "\n".join(r.errors), r.errors
+
+    # dangling references: lyric_tracks[].stem, tones rig ids, notation stave
+    # keys, rigs.json graph nodes.
+    stemdangle = Path(t) / "stemdangle.feedpak"
+    _pack(stemdangle, lyric_tracks=[{"id": "en", "file": "lyrics_en.json", "language": "en",
+                                      "kind": "original", "stem": "nope", "content": []}])
+    assert fp.check(stemdangle, strict=False).ok
+    r = fp.check(stemdangle, strict=True)
+    assert not r.ok and "does not match any stems[].id" in "\n".join(r.errors), r.errors
+
+    norigs = Path(t) / "norigs.feedpak"
+    _pack(norigs, tones={"base": "Clean", "base_rig": "clean-rhythm"})
+    assert fp.check(norigs, strict=False).ok
+    r = fp.check(norigs, strict=True)
+    assert not r.ok and "tones reference rig ids but the manifest has no rigs file" in "\n".join(r.errors), r.errors
+
+    ridbad = Path(t) / "ridbad.feedpak"
+    _pack(ridbad, tones={"base": "Clean", "base_rig": "nope"},
+          rigs={"version": 1, "rigs": [{"id": "clean-rhythm", "blocks": []}]})
+    assert fp.check(ridbad, strict=False).ok
+    r = fp.check(ridbad, strict=True)
+    assert not r.ok and "tones rig 'nope' not found in rigs.json" in "\n".join(r.errors), r.errors
+
+    undeclared_measures = [{"idx": 1, "t": 0.0, "ts": [4, 4],
+                             "staves": {"ghost": {"voices": [{"v": 1, "beats": _beats(1)}]}}}]
+    undeclared = Path(t) / "undeclared.feedpak"
+    _notation_pack(undeclared, undeclared_measures)
+    assert fp.check(undeclared, strict=False).ok
+    r = fp.check(undeclared, strict=True)
+    assert not r.ok and "references undeclared stave 'ghost'" in "\n".join(r.errors), r.errors
+
+    graphbad = Path(t) / "graphbad.feedpak"
+    _pack(graphbad, rigs={"version": 1, "rigs": [{"id": "r1", "blocks": [{"id": "amp"}],
+          "graph": {"nodes": ["input", "amp", "output"], "edges": [["input", "ghost"]]}}]})
+    assert fp.check(graphbad, strict=False).ok
+    r = fp.check(graphbad, strict=True)
+    assert not r.ok and "graph edge references unknown node 'ghost'" in "\n".join(r.errors), r.errors
+
+    graphnodebad = Path(t) / "graphnodebad.feedpak"
+    _pack(graphnodebad, rigs={"version": 1, "rigs": [{"id": "r1", "blocks": [{"id": "amp"}],
+          "graph": {"nodes": ["input", "amp", "ghost", "output"],
+                    "edges": [["input", "amp"], ["amp", "output"]]}}]})
+    assert fp.check(graphnodebad, strict=False).ok
+    r = fp.check(graphnodebad, strict=True)
+    assert not r.ok and "graph node 'ghost' does not match any block id" in "\n".join(r.errors), r.errors
+
+    # §7.6: beat_groups must sum to the time signature numerator.
+    bgbad_measures = [{"idx": 1, "t": 0.0, "ts": [4, 4], "beat_groups": [3, 3],
+                        "staves": {"rh": {"voices": [{"v": 1, "beats": _beats(1)}]}}}]
+    bgbad = Path(t) / "bgbad.feedpak"
+    _notation_pack(bgbad, bgbad_measures)
+    assert fp.check(bgbad, strict=False).ok
+    r = fp.check(bgbad, strict=True)
+    assert not r.ok and "beat_groups sum to 6 but the time signature numerator is 4" in "\n".join(r.errors), r.errors
+
+    # §7.9: a nam/ir realization ref must be a safe relative path. (File
+    # existence is deliberately NOT checked — see PR notes: the vendored
+    # extended.feedpak example ships rigs.json referencing capture/IR assets
+    # it doesn't include, so "missing" would false-positive the canary pack.)
+    refunsafe = Path(t) / "refunsafe.feedpak"
+    _pack(refunsafe, rigs={"version": 1, "rigs": [{"id": "r1", "blocks": [
+          {"id": "amp", "realizations": [{"engine": "nam", "ref": "../x.nam"}]}]}]})
+    assert fp.check(refunsafe, strict=False).ok
+    r = fp.check(refunsafe, strict=True)
+    assert not r.ok and "realization ref is not a safe relative path" in "\n".join(r.errors), r.errors
+
+    # §7.1: a bare '-'/'+' is a join/line marker with no syllable text.
+    lyricsuffix = Path(t) / "lyricsuffix.feedpak"
+    _pack(lyricsuffix, lyrics=[{"t": 1.0, "d": 0.1, "w": "-"}])
+    assert fp.check(lyricsuffix, strict=False).ok
+    r = fp.check(lyricsuffix, strict=True)
+    assert not r.ok and "lyrics[0].w is a bare '-'" in "\n".join(r.errors), r.errors
+
 # _explain(): every rule must match its own trigger text (each rule proven
 # reachable) and produce a DIFFERENT sentence from its neighbors (otherwise a
 # rule is dead weight — already covered by a broader one). An unmatched line
@@ -303,6 +486,19 @@ _EXPLAIN_CASES = [
     "manifest.yaml: top level must be a mapping",
     "feedpak_version is not a valid semver string: '1.0'",
     "not a directory or a zip archive",
+    # Phase 2 (Group B)
+    "arrangements/lead.json: tuning has 3 strings — the spec accepts 4 to 8",
+    "arrangements/lead.json: templates[0].frets has 3 entries for a 6-string tuning",
+    "arrangements/lead.json: templates[0].fingers value 7 out of range (-1..4)",
+    "lyric_tracks[0].stem 'nope' does not match any stems[].id",
+    "arrangements/lead.json: tones reference rig ids but the manifest has no rigs file",
+    "arrangements/lead.json: tones rig 'nope' not found in rigs.json",
+    "notation_keys.json: measure 1 references undeclared stave 'ghost'",
+    "rigs.json: rigs[0] graph edge references unknown node 'ghost'",
+    "rigs.json: rigs[0] graph node 'ghost' does not match any block id",
+    "notation_keys.json: measure 1: beat_groups sum to 6 but the time signature numerator is 4",
+    "rigs.json: rigs[0] realization ref is not a safe relative path: '../x.nam'",
+    "lyrics.json: lyrics[0].w is a bare '-' — join/line markers are suffixes on a syllable, not standalone entries",
 ]
 explanations = [fp._explain(c) for c in _EXPLAIN_CASES]
 assert all(e != fp._EXPLAIN_FALLBACK for e in explanations), \
