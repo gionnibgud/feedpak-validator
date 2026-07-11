@@ -718,10 +718,14 @@ def _validate_root(root: Path, strict: bool, rep: ref.Report) -> None:
     """Basic (reference) validation of an unpacked root, plus the strict layer."""
     ref.validate_dir(root, rep)            # basic level, verbatim
     if strict and (root / "manifest.yaml").is_file():
-        manifest = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8"))
-        if isinstance(manifest, dict):
-            _strict_schema_errors(manifest, root, rep)
-            _strict_semantics(manifest, root, rep)
+        try:
+            manifest = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            return  # basic already recorded the parse error; strict has nothing to add
+        if not isinstance(manifest, dict):
+            return  # a manifest that isn't a mapping breaks strict's dict access
+        _strict_schema_errors(manifest, root, rep)
+        _strict_semantics(manifest, root, rep)
 
 
 def check(pack: Path, strict: bool) -> ref.Report:
