@@ -49,24 +49,62 @@ Invariants the JSON Schemas can't express (`fpvalidate.py`'s `_strict_schema_err
 2. **Unknown keys rejected on every arrangement JSON** — same closed-world check, but the
    `note`/`chordNote` schema defs are first patched with the real §6.2 field set the schema
    omits (`NOTE_EXTRA` in `fpvalidate.py`), so a genuinely-unknown field (a typo) is what gets
-   flagged — not a real spec field the schema just doesn't list.
-3. **Duplicate `arrangements[].id` values.**
-4. **Duplicate `stems[].id` values.**
-5. **More than one stem marked `default: true`.**
-6. **`lyric_tracks[].file` existence** — basic/the reference validator never opens these.
-7. **`note.s` (string index) in range** for the arrangement's tuning.
-8. **`handshape.chord_id` in range** of the arrangement's chord `templates`.
-9. **`chord.id` in range** of the arrangement's chord `templates`.
-10. **Non-decreasing time ordering** for `notes[].t`, `chords[].t`, `anchors[].time`,
-    `beats[].time`, `sections[].time`, `tempos[].time` (flags the first out-of-order entry per
-    array; equal timestamps are legal).
-11. **Positive-length spans** for `handshapes[]` and `phrases[]` (`end_time` must be `>
-    start_time`).
+   flagged — not a real spec field the schema just doesn't list. A `.jsonc` arrangement (comments,
+   §6/§8) is parsed the same way basic parses it, instead of crashing strict.
+3. **Duplicate ids** — `arrangements[].id`, `stems[].id`, `lyric_tracks[].id`, `rigs.json`
+   `rigs[].id`, `drum_tab.json` `kit[].id`, and each `notation_<id>.json`'s `staves[].id`.
+4. **More than one stem marked `default: true`** — accepting the case-insensitive
+   `true`/`false`/`on`/`off`/`yes`/`no` strings the spec requires readers to understand (§5.3),
+   not just a real boolean.
+5. **`lyric_tracks[].file` existence and schema** — basic/the reference validator never opens
+   these; strict also schema-validates each track's contents against the plain `lyrics.schema.json`
+   and checks `lyric_tracks[].stem` resolves to a real `stems[].id`.
+6. **`note.s` / chord-note `.s` (string index) in range** for the arrangement's *effective*
+   tuning — the manifest-level `tuning` overrides the arrangement JSON's (§5.2) — including
+   notes and chords inside `phrases[].levels[]`, not just the chart's top level.
+7. **`handshape.chord_id` / `chord.id` in range** of the arrangement's chord `templates`,
+   including inside `phrases[].levels[]`.
+8. **Arrangement tuning length is 4–8 strings** (§5.2), and chord **template `frets`/`fingers`
+   arrays match the string count** with **`fingers` values in `-1..4`** (§6.6) — skipped when a
+   shape array is empty (the default/absent case).
+9. **Non-decreasing time ordering** for `notes[].t`, `chords[].t`, `anchors[].time`,
+   `beats[].time`, `sections[].time`, `tempos[].time` (including inside `phrases[].levels[]`),
+   plus note/chord-note `bnv` curve points, an arrangement's `tones.changes[].t`,
+   `song_timeline.json`'s `tempos`/`time_signatures`/`beats`/`sections`, `keys.json`/`harmony.json`
+   `events[].t`, `drum_tab.json` `hits[].t`, `rigs.json` per-block `automation[].points[].t`, and
+   `notation_<id>.json` `measures[].idx` (flags the first out-of-order entry per array; equal
+   timestamps are legal).
+10. **Positive-length spans** for `handshapes[]` and `phrases[]` (`end_time` must be `>
+    start_time`), including handshapes inside `phrases[].levels[]`.
+11. **Dangling references** — an arrangement's `tones.base_rig` / `tones.changes[].rig` must
+    resolve against `rigs.json` (and the manifest must have a `rigs` pointer at all if any are
+    referenced); `rigs.json` `graph` edges/nodes must resolve to declared nodes/block ids; a
+    `nam`/`ir` realization `ref` must be a safe relative path (or contain `://` for a URI).
 12. **`notation_<id>.json` measures don't overflow their time signature** — each stave/voice's
     beat durations (honoring `dot` and `tu` tuplet ratios) are summed and compared against the
     measure's `ts` capacity, carried forward across measures that omit `ts` (§7.6 "omit if
     unchanged"). Catches schema-invisible corruption like a beat-grid generator that stopped
     early and dumped an entire song into one measure.
+13. **`notation_<id>.json` `beat_groups` sum to the time signature numerator** (§7.6), and every
+    measure `staves` key resolves to a declared `staves[].id`.
+14. **`lyrics.json` / `lyric_tracks` entries reject a bare `"-"`/`"+"`** as `w` (§7.1) — a
+    join/line marker is a suffix on a real syllable, not a standalone entry.
+
+### warnings (strict) — SHOULD-level
+
+Strict also emits **warnings** (don't fail the pack) for SHOULD-level rules the spec allows a
+Reader to tolerate:
+
+- **No OGG/WAV baseline stem** (§5.3.2) — the pack's resolved stem codecs (explicit `codec`
+  field, else file extension) include neither `vorbis` nor `pcm`, so a leaner Reader may have
+  nothing it can decode.
+- **A note/chord-note carries a bend shape (`bt`/`bnv`) but `bn` is `0`** (§6.2.1 SHOULD NOT).
+- **A `lyric_tracks[].kind`** isn't `original`/`transliteration`/`translation`, or **`lyrics`
+  doesn't point at the `kind: original` track's file** (§5.5) — a pre-1.11 Reader may show
+  nothing.
+- **A `drum_tab.json` hit's piece id is outside the closed v1 vocabulary** (§7.5) — still
+  round-trips, just renders with a generic fallback.
+- **A note's fret exceeds 24** (§6.2) — beyond the fretboard of nearly every real instrument.
 
 ## Install
 
