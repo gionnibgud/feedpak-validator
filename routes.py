@@ -33,6 +33,11 @@ _DEFAULT_PACK_LIMIT = 300
 _MAX_PACK_LIMIT = 1000
 _MAX_VALIDATE_BATCH = 200
 
+# Request/upload bounds: cap files per multipart upload and the /validate JSON
+# body so a single request can't fan out or buffer unboundedly.
+_MAX_UPLOAD_FILES = 64
+_MAX_JSON_BODY = 4 * 1024**2  # 4 MiB — a list of pack ids is tiny
+
 
 def _is_within(root: Path, candidate: Path) -> bool:
     """True iff candidate resolves inside root (normalising ../ and symlinks).
@@ -115,6 +120,11 @@ def setup(app, context):
 
     @router.post("/validate")
     async def validate_library(request: Request):
+        # Content-Length is a cheap first-line guard (a chunked body bypasses it);
+        # acceptable for a loopback plugin where the real limit is the pack-id list.
+        clen = request.headers.get("content-length")
+        if clen and clen.isdigit() and int(clen) > _MAX_JSON_BODY:
+            return JSONResponse({"error": "request body too large"}, status_code=413)
         body = await request.json()
         ids = body.get("ids") or []
         # Default strict: basic is spec-conformance only and misses things like
@@ -161,6 +171,11 @@ def setup(app, context):
     @router.post("/validate-upload")
     async def validate_upload(files: list[UploadFile] = File(...),
                               strict: bool = Form(True)):  # see /validate — default strict
+        if len(files) > _MAX_UPLOAD_FILES:
+            return JSONResponse({
+                "error": f"too many files ({len(files)}); upload at most "
+                         f"{_MAX_UPLOAD_FILES} at a time",
+            }, status_code=400)
         results = []
         level = "strict" if strict else "basic"
         for uf in files:
@@ -192,6 +207,10 @@ def setup(app, context):
                     "errors": [f"{exc}"], "warnings": [],
                 })
             finally:
+                try:
+                    tmp.close()  # idempotent; ensures the fd is released before unlink
+                except Exception:
+                    pass
                 Path(tmp.name).unlink(missing_ok=True)
         passed = sum(1 for r in results if r["ok"])
         return JSONResponse({"results": results, "passed": passed, "total": len(results)})
