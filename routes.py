@@ -144,12 +144,16 @@ def setup(app, context):
                 })
                 continue
             try:
-                results.append(fp.validate(str(entry["path"]), strict))
-            except Exception as exc:
+                result = fp.validate(str(entry["path"]), strict)
+                # validate() reports the absolute server path as the pack label
+                # — overwrite it with the library name so no host path leaks out.
+                result["pack"] = entry["name"]
+                results.append(result)
+            except Exception:
                 log.exception("validation crashed for pack %r", entry["name"])
                 results.append({
                     "pack": entry["name"], "level": level, "ok": False,
-                    "errors": [f"validator error: {exc}"], "warnings": [],
+                    "errors": ["validator error (see server log)"], "warnings": [],
                 })
         passed = sum(1 for r in results if r["ok"])
         return JSONResponse({"results": results, "passed": passed, "total": len(results)})
