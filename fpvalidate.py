@@ -69,6 +69,12 @@ from pathlib import Path
 # See vendor/feedpak-spec/VENDOR.txt for the exact source commit.
 SPEC = Path(__file__).resolve().parent / "vendor" / "feedpak-spec"
 
+# Decompression-bomb caps for zip packs: reject before extracting, using only
+# the central-directory metadata (entry count + declared uncompressed sizes) so
+# a crafted archive can't exhaust disk/inodes on the host.
+_MAX_ARCHIVE_ENTRIES = 100_000
+_MAX_ARCHIVE_UNCOMPRESSED = 2 * 1024**3  # 2 GiB
+
 
 def _load_ref():
     """Import the vendored reference validator by file path under a private name,
@@ -712,10 +718,14 @@ def _validate_root(root: Path, strict: bool, rep: ref.Report) -> None:
     """Basic (reference) validation of an unpacked root, plus the strict layer."""
     ref.validate_dir(root, rep)            # basic level, verbatim
     if strict and (root / "manifest.yaml").is_file():
-        manifest = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8"))
-        if isinstance(manifest, dict):
-            _strict_schema_errors(manifest, root, rep)
-            _strict_semantics(manifest, root, rep)
+        try:
+            manifest = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            return  # basic already recorded the parse error; strict has nothing to add
+        if not isinstance(manifest, dict):
+            return  # a manifest that isn't a mapping breaks strict's dict access
+        _strict_schema_errors(manifest, root, rep)
+        _strict_semantics(manifest, root, rep)
 
 
 def check(pack: Path, strict: bool) -> ref.Report:
@@ -728,6 +738,15 @@ def check(pack: Path, strict: bool) -> ref.Report:
     elif pack.is_file() and zipfile.is_zipfile(pack):
         with tempfile.TemporaryDirectory() as tmp:
             with zipfile.ZipFile(pack) as zf:
+                # Decompression-bomb caps, checked from the central directory
+                # before any extraction (see _MAX_ARCHIVE_* above).
+                infos = zf.infolist()
+                if len(infos) > _MAX_ARCHIVE_ENTRIES:
+                    rep.err(f"archive has too many entries ({len(infos)} > "
+                            f"{_MAX_ARCHIVE_ENTRIES})")
+                if sum(i.file_size for i in infos) > _MAX_ARCHIVE_UNCOMPRESSED:
+                    rep.err(f"archive too large uncompressed "
+                            f"(> {_MAX_ARCHIVE_UNCOMPRESSED} bytes)")
                 for name in zf.namelist():
                     if (name.startswith("/") or ".." in Path(name).parts
                             or "\\" in name or ":" in name):
