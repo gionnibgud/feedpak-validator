@@ -1,3 +1,3 @@
 Vendored from https://github.com/got-feedBack/feedpak-spec
-tag: v1.14.0
-commit: 6147fe93506046cd0faa1ff9058ce2a33eb616bd
+tag: v1.15.0
+commit: 7eae0101032328d93b0d9365a6b3b1903fc35f77

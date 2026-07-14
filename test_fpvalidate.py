@@ -13,7 +13,7 @@ import fpvalidate as fp
 
 def test_spec_info():
     info = fp.spec_info()
-    assert info["tag"] == "v1.14.0", info
+    assert info["tag"] == "v1.15.0", info
     assert info["commit"] and len(info["commit"]) == 40, info
     assert info["repo"] and info["repo"].startswith("https://"), info
 
@@ -251,19 +251,41 @@ def test_strict_checks():
         assert not r.ok, "strict must use the manifest's tuning override, not the arrangement JSON's"
         assert "out of range for 4-string tuning" in "\n".join(r.errors), r.errors
 
-        # §5.3: `default` accepts case-insensitive true/false/on/off/yes/no, not
-        # just a real boolean — two stems both "off" must NOT look like two defaults.
-        stemsoff = Path(t) / "stemsoff.feedpak"
-        _pack(stemsoff, stems=[{"id": "full", "file": "stems/full.ogg", "default": "off"},
-                                {"id": "alt", "file": "stems/full.ogg", "default": "off"}])
-        assert fp.check(stemsoff, strict=True).ok, "two stems default:\"off\" must not false-positive"
-
+        # §5.3: `default` accepts case-insensitive true/false/on/off/yes/no.
+        # Multiple ENABLED stems is a normal mix (a stem mixer) — the spec sets
+        # no at-most-one-default rule (the v1.15 example enables three at once),
+        # so several default:on entries must PASS.
         stemson = Path(t) / "stemson.feedpak"
-        _pack(stemson, stems=[{"id": "full", "file": "stems/full.ogg", "default": "on"},
+        _pack(stemson, stems=[{"id": "gtr", "file": "stems/full.ogg", "default": "on"},
                                {"id": "alt", "file": "stems/full.ogg", "default": "ON"}])
-        r = fp.check(stemson, strict=True)
-        assert not r.ok, "two stems default:\"on\"/\"ON\" must still trigger the more-than-one-default check"
-        assert "more than one stem marked default" in "\n".join(r.errors), r.errors
+        assert fp.check(stemson, strict=True).ok, \
+            "multiple enabled stems is a normal mix — no at-most-one-default rule (spec §5.3)"
+
+        # §5.3 (v1.15): the reserved `full` mixdown must NOT be default:true when
+        # per-instrument stems are also present — a Reader summing enabled stems
+        # would double the whole song. basic can't see this; strict must.
+        fulldef = Path(t) / "fulldef.feedpak"
+        _pack(fulldef, stems=[{"id": "full", "file": "stems/full.ogg", "default": True},
+                               {"id": "drums", "file": "stems/full.ogg", "default": True}])
+        assert fp.check(fulldef, strict=False).ok, "loose spec: basic ignores the reserved-full rule"
+        r = fp.check(fulldef, strict=True)
+        assert not r.ok, "strict must reject default:true `full` alongside per-instrument stems"
+        assert "stem 'full' is marked default" in "\n".join(r.errors), r.errors
+
+        # a lone `full` stem (single-stem pack) default:true is correct — must PASS.
+        fullonly = Path(t) / "fullonly.feedpak"
+        _pack(fullonly, stems=[{"id": "full", "file": "stems/full.ogg", "default": True}])
+        assert fp.check(fullonly, strict=True).ok, "a single `full` stem default:true is normal"
+
+        # §5.3 (v1.15) SHOULD: a separated pack (stem_separation present) that
+        # keeps no `full` mixdown warns — but does not fail.
+        noful = Path(t) / "noful.feedpak"
+        _pack(noful, stems=[{"id": "drums", "file": "stems/full.ogg", "default": True}],
+              manifest_extra={"stem_separation": {"engine": "demucs", "model": "htdemucs_6s",
+                                                    "version": "1.0.0"}})
+        r = fp.check(noful, strict=True)
+        assert r.ok, "missing `full` after separation is a SHOULD — warning, not failure"
+        assert any("no reserved 'full' mixdown" in w for w in r.warnings), r.warnings
 
         # song_timeline.json (§7.4): tempos/time_signatures/beats/sections are
         # each independently time-ordered; validate.py schema-checks the file's
@@ -530,7 +552,8 @@ def test_explanations():
         "arrangements/lead.json: notes[3].t=2.0 < previous 5.0 (not in time order)",
         "arrangements/lead.json: handshapes[0] end_time 1.0 <= start_time 2.0",
         "duplicate arrangement id: 'lead'",
-        "more than one stem marked default:true",
+        "stem 'full' is marked default:true but the pack also ships per-instrument stems — the reserved full mixdown must not be summed with them (spec §5.3)",
+        "stems were separated (stem_separation present) but no reserved 'full' mixdown stem is retained — the original mix cannot be rebuilt from the separated parts (spec §5.3)",
         "missing file referenced by manifest: arrangements/lead.json",
         "lyric_tracks[0].file missing: lyrics/en.json",
         "manifest 'cover' is not a safe relative path: '/etc/passwd'",
