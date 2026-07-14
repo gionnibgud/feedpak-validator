@@ -11,7 +11,8 @@
             - unknown keys rejected (manifest + arrangements, prose-aware)
             - arrangement/stem/lyric-track/rig/drum-kit-piece/notation-stave id
               uniqueness
-            - at most one default stem (accepting true/false/on/off/yes/no)
+            - reserved `full` stem (§5.3): not default:true alongside
+              per-instrument stems (accepting true/false/on/off/yes/no)
             - note/chord-note.string index within the effective tuning
               (manifest tuning overrides the arrangement JSON's), including
               inside phrases[].levels[]
@@ -38,6 +39,7 @@
             - a .jsonc arrangement (comments) doesn't crash strict
 
           plus warnings (SHOULD-level, don't fail the pack):
+            - a separated pack (stem_separation) that retains no `full` mixdown
             - no OGG/WAV (or PCM/Vorbis-codec) baseline stem — not portable
             - a note/chord-note carries a bend shape (bt/bnv) but bn is 0
             - a lyric_tracks kind isn't original/transliteration/translation,
@@ -241,8 +243,23 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
     _dupes(rep, "lyric track id",
            [t.get("id") for t in manifest.get("lyric_tracks", []) or [] if isinstance(t, dict)])
 
-    if sum(1 for s in stems if isinstance(s, dict) and _stem_default(s.get("default"))) > 1:
-        rep.err("more than one stem marked default:true")
+    # §5.3 (v1.15): the id `full` is RESERVED for the complete mixdown. When a
+    # pack ships `full` alongside per-instrument stems, `full` is a mixdown, not
+    # a layer — a Writer MUST NOT mark it default:true (a Reader that sums enabled
+    # stems would double the whole song). Retaining `full` after separation is a
+    # SHOULD, proxied here by the presence of a stem_separation provenance block.
+    full_stems = [s for s in stems if isinstance(s, dict) and s.get("id") == "full"]
+    other_stems = [s for s in stems if isinstance(s, dict) and s.get("id") != "full"]
+    if other_stems:
+        for s in full_stems:
+            if _stem_default(s.get("default")):
+                rep.err("stem 'full' is marked default:true but the pack also ships "
+                        "per-instrument stems — the reserved full mixdown must not be "
+                        "summed with them (spec §5.3)")
+    if manifest.get("stem_separation") and stems and not full_stems:
+        rep.warn("stems were separated (stem_separation present) but no reserved 'full' "
+                 "mixdown stem is retained — the original mix cannot be rebuilt from the "
+                 "separated parts (spec §5.3)")
 
     # §5.3.2 (SHOULD): a distributable pack needs at least one OGG/WAV
     # (resolved codec vorbis/pcm) baseline stem so a leaner Reader has
@@ -843,9 +860,12 @@ _EXPLAIN: list[tuple[object, str]] = [
     (lambda s: s.startswith("duplicate "),
      "Two parts of this pack are using the same internal ID, which can confuse feedBack "
      "about which one to use."),
-    (_has("more than one stem marked default"),
-     "More than one audio track is marked as the default — feedBack won't know which one "
-     "to play first."),
+    (_has("stem 'full' is marked default"),
+     "The complete-mixdown track is set to play alongside the separated instrument tracks — "
+     "that double-plays the whole song. The full mix should be off when instrument stems are present."),
+    (_has("no reserved 'full' mixdown stem is retained"),
+     "This pack was split into per-instrument tracks but kept no complete mix — and the split "
+     "is lossy, so the original recording can't be rebuilt from the parts."),
     (_has("missing file referenced by manifest"),
      "This pack points to a file that isn't actually there — that file won't load."),
     (_has("lyric_tracks", "missing"),
