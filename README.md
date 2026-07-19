@@ -3,7 +3,7 @@
 Validates `.feedpak` packages against the [feedpak spec](https://github.com/got-feedBack/feedpak-spec)
 from inside feedBack — as a standalone screen **and** as a service other plugins (e.g. the
 editor) can call. Wraps the two-level validator (`fpvalidate.py`, vendored, pinned to
-feedpak-spec **v1.15.0**).
+feedpak-spec **v1.16.0**).
 
 | Level | What it checks |
 |-------|----------------|
@@ -53,12 +53,17 @@ Invariants the JSON Schemas can't express (`fpvalidate.py`'s `_strict_schema_err
    §6/§8) is parsed the same way basic parses it, instead of crashing strict.
 3. **Duplicate ids** — `arrangements[].id`, `stems[].id`, `lyric_tracks[].id`, `rigs.json`
    `rigs[].id`, `drum_tab.json` `kit[].id`, and each `notation_<id>.json`'s `staves[].id`.
-4. **Reserved `full` stem misuse (§5.3, v1.15)** — a stem `id: full` is the complete mixdown, not
-   an instrument layer, so it **MUST NOT** be `default: true` in a pack that also ships
+4. **Reserved `full` stem misuse (§5.3, v1.15/v1.16)** — a stem `id: full` is the complete mixdown,
+   not an instrument layer, so it **MUST NOT** be `default: true` in a pack that also ships
    per-instrument stems (a Reader summing enabled stems would double the whole song). `default` is
    read via the case-insensitive `true`/`false`/`on`/`off`/`yes`/`no` strings the spec requires
    readers to understand, not just a real boolean. (Multiple *instrument* stems marked default is a
-   normal mix and is **not** flagged — the spec sets no at-most-one-default rule.)
+   normal mix and is **not** flagged — the spec sets no at-most-one-default rule.) Retaining `full`
+   after separation is **version-scoped** (v1.16): a `stem_separation` block with no `full` stem is
+   an **error** when the pack declares `feedpak_version ≥ 1.16.0` (the SHOULD became a MUST), and a
+   warning below that — see [warnings](#warnings-strict--should-level). The optional per-stem `name`
+   / `description` display fields added in v1.16 are recognized (schema-defined), so strict's
+   closed-world check doesn't flag them.
 5. **`lyric_tracks[].file` existence and schema** — basic/the reference validator never opens
    these; strict also schema-validates each track's contents against the plain `lyrics.schema.json`
    and checks `lyric_tracks[].stem` resolves to a real `stems[].id`.
@@ -98,10 +103,11 @@ Invariants the JSON Schemas can't express (`fpvalidate.py`'s `_strict_schema_err
 Strict also emits **warnings** (don't fail the pack) for SHOULD-level rules the spec allows a
 Reader to tolerate:
 
-- **Separated pack with no `full` mixdown** (§5.3, v1.15) — a `stem_separation` block is present
+- **Separated pack with no `full` mixdown** (§5.3) — a `stem_separation` block is present
   (the stems were machine-separated) but no stem `id: full` is retained. Separation is lossy, so
-  the original mix can't be rebuilt from the parts; the spec SHOULD-recommends keeping `full`
-  (`default: false`).
+  the original mix can't be rebuilt from the parts; the spec keeps `full` (`default: false`).
+  **Warning below `feedpak_version` 1.16.0** (SHOULD); a pack declaring **≥ 1.16.0** turns this into
+  an **error** (the MUST is version-scoped, so no pre-1.16 pack becomes non-conformant).
 - **No OGG/WAV baseline stem** (§5.3.2) — the pack's resolved stem codecs (explicit `codec`
   field, else file extension) include neither `vorbis` nor `pcm`, so a leaner Reader may have
   nothing it can decode.

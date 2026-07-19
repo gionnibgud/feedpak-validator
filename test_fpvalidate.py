@@ -13,7 +13,7 @@ import fpvalidate as fp
 
 def test_spec_info():
     info = fp.spec_info()
-    assert info["tag"] == "v1.15.0", info
+    assert info["tag"] == "v1.16.0", info
     assert info["commit"] and len(info["commit"]) == 40, info
     assert info["repo"] and info["repo"].startswith("https://"), info
 
@@ -277,15 +277,40 @@ def test_strict_checks():
         _pack(fullonly, stems=[{"id": "full", "file": "stems/full.ogg", "default": True}])
         assert fp.check(fullonly, strict=True).ok, "a single `full` stem default:true is normal"
 
-        # §5.3 (v1.15) SHOULD: a separated pack (stem_separation present) that
-        # keeps no `full` mixdown warns — but does not fail.
-        noful = Path(t) / "noful.feedpak"
-        _pack(noful, stems=[{"id": "drums", "file": "stems/full.ogg", "default": True}],
-              manifest_extra={"stem_separation": {"engine": "demucs", "model": "htdemucs_6s",
-                                                    "version": "1.0.0"}})
-        r = fp.check(noful, strict=True)
-        assert r.ok, "missing `full` after separation is a SHOULD — warning, not failure"
+        # §5.3: retaining `full` after separation is version-scoped — a SHOULD
+        # (warning, pack passes) below feedpak_version 1.16.0, a MUST (error,
+        # pack fails) at >= 1.16.0. Same pack, two declared versions.
+        _sep = {"stem_separation": {"engine": "demucs", "model": "htdemucs_6s", "version": "1.0.0"}}
+
+        noful_pre = Path(t) / "noful_pre.feedpak"      # 1.11.0 default from _pack
+        _pack(noful_pre, stems=[{"id": "drums", "file": "stems/full.ogg", "default": True}],
+              manifest_extra=_sep)
+        r = fp.check(noful_pre, strict=True)
+        assert r.ok, "missing `full` after separation is a SHOULD below 1.16.0 — warning, not failure"
         assert any("no reserved 'full' mixdown" in w for w in r.warnings), r.warnings
+
+        noful_116 = Path(t) / "noful_116.feedpak"
+        _pack(noful_116, stems=[{"id": "drums", "file": "stems/full.ogg", "default": True}],
+              manifest_extra={**_sep, "feedpak_version": "1.16.0"})
+        r = fp.check(noful_116, strict=True)
+        assert not r.ok, "missing `full` after separation is a MUST at feedpak_version >= 1.16.0"
+        assert any("no reserved 'full' mixdown" in e for e in r.errors), r.errors
+
+        # SemVer: a prerelease of 1.16.0 sorts BEFORE the release, so the
+        # version-scoped MUST doesn't bind yet — warning, pack still passes.
+        noful_rc = Path(t) / "noful_rc.feedpak"
+        _pack(noful_rc, stems=[{"id": "drums", "file": "stems/full.ogg", "default": True}],
+              manifest_extra={**_sep, "feedpak_version": "1.16.0-rc1"})
+        r = fp.check(noful_rc, strict=True)
+        assert r.ok, "1.16.0-rc1 predates 1.16.0 (SemVer) — the MUST must not bind"
+        assert any("no reserved 'full' mixdown" in w for w in r.warnings), r.warnings
+
+        # §5.3 (v1.16): optional per-stem `name`/`description` are recognized —
+        # the closed-world strict check must NOT flag them as unknown fields.
+        stemmeta = Path(t) / "stemmeta.feedpak"
+        _pack(stemmeta, stems=[{"id": "full", "file": "stems/full.ogg", "default": True,
+                                 "name": "Full Mix", "description": "the complete mixdown"}])
+        assert fp.check(stemmeta, strict=True).ok, "stem name/description are valid v1.16 fields"
 
         # song_timeline.json (§7.4): tempos/time_signatures/beats/sections are
         # each independently time-ordered; validate.py schema-checks the file's
@@ -592,6 +617,19 @@ def test_explanations():
     assert len(set(explanations)) == len(_EXPLAIN_CASES), \
         "two trigger cases produced the same explanation — one rule is unreachable"
     assert fp._explain("some future check nobody wrote a rule for yet") == fp._EXPLAIN_FALLBACK
+
+    # Message variants that deliberately SHARE a predicate (same explanation as a
+    # case above) can't join _EXPLAIN_CASES — the uniqueness assert would trip —
+    # but must still be covered so wording drift can't silently drop them to the
+    # fallback. One entry per variant:
+    _EXPLAIN_VARIANTS = [
+        # >= 1.16.0 error form of the missing-`full` warning (same §5.3 rule)
+        "stems were separated (stem_separation present) but no reserved 'full' "
+        "mixdown stem is retained — the original mix cannot be rebuilt from the "
+        "separated parts (spec §5.3) — MUST at feedpak_version >= 1.16.0",
+    ]
+    for v in _EXPLAIN_VARIANTS:
+        assert fp._explain(v) != fp._EXPLAIN_FALLBACK, v
 
 
 if __name__ == "__main__":
