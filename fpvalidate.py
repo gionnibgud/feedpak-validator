@@ -12,7 +12,8 @@
             - arrangement/stem/lyric-track/rig/drum-kit-piece/notation-stave id
               uniqueness
             - reserved `full` stem (§5.3): not default:true alongside
-              per-instrument stems (accepting true/false/on/off/yes/no)
+              per-instrument stems (accepting true/false/on/off/yes/no);
+              a separated pack at feedpak_version >= 1.16.0 MUST retain `full`
             - note/chord-note.string index within the effective tuning
               (manifest tuning overrides the arrangement JSON's), including
               inside phrases[].levels[]
@@ -39,7 +40,8 @@
             - a .jsonc arrangement (comments) doesn't crash strict
 
           plus warnings (SHOULD-level, don't fail the pack):
-            - a separated pack (stem_separation) that retains no `full` mixdown
+            - a separated pack (stem_separation) below feedpak_version 1.16.0
+              that retains no `full` mixdown (a MUST/error at >= 1.16.0)
             - no OGG/WAV (or PCM/Vorbis-codec) baseline stem — not portable
             - a note/chord-note carries a bend shape (bt/bnv) but bn is 0
             - a lyric_tracks kind isn't original/transliteration/translation,
@@ -187,6 +189,24 @@ def _strict_schema_errors(manifest: dict, root: Path, rep: ref.Report) -> None:
                 rep.err(f"{f} [strict]: {_loc(e)}: {e.message}")
 
 
+def _feedpak_ge(manifest: dict, major: int, minor: int) -> bool:
+    """True when the manifest's feedpak_version is >= major.minor.0 in SemVer
+    order. Absent => treated as 1.0.0 (§4.1); unparseable => False (basic
+    already flags it, and a version-gated MUST shouldn't escalate on a version
+    we can't read). A prerelease of major.minor.0 itself (e.g. 1.16.0-rc1)
+    sorts BEFORE the release (SemVer 2.0.0 §11), so the gate doesn't bind yet."""
+    v = manifest.get("feedpak_version")
+    if not isinstance(v, str):
+        return False
+    m = re.match(r"\s*(\d+)\.(\d+)\.(\d+)(-?)", v)
+    if not m:
+        return False
+    mm = (int(m.group(1)), int(m.group(2)))
+    if mm != (major, minor):
+        return mm > (major, minor)
+    return not (m.group(3) == "0" and m.group(4))
+
+
 def _stem_default(v: object) -> bool:
     """§5.3: readers MUST also accept the case-insensitive strings
     true/false, on/off, yes/no for `default`, not just a real boolean."""
@@ -256,10 +276,18 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
                 rep.err("stem 'full' is marked default:true but the pack also ships "
                         "per-instrument stems — the reserved full mixdown must not be "
                         "summed with them (spec §5.3)")
+    # Retaining `full` after separation is version-scoped (§5.3): a SHOULD (warning)
+    # below 1.16.0, promoted to a MUST (error) for packs declaring feedpak_version
+    # >= 1.16.0. The obligation binds the act of separating, proxied by the
+    # stem_separation provenance block.
     if manifest.get("stem_separation") and stems and not full_stems:
-        rep.warn("stems were separated (stem_separation present) but no reserved 'full' "
-                 "mixdown stem is retained — the original mix cannot be rebuilt from the "
-                 "separated parts (spec §5.3)")
+        msg = ("stems were separated (stem_separation present) but no reserved 'full' "
+               "mixdown stem is retained — the original mix cannot be rebuilt from the "
+               "separated parts (spec §5.3)")
+        if _feedpak_ge(manifest, 1, 16):
+            rep.err(msg + " — MUST at feedpak_version >= 1.16.0")
+        else:
+            rep.warn(msg)
 
     # §5.3.2 (SHOULD): a distributable pack needs at least one OGG/WAV
     # (resolved codec vorbis/pcm) baseline stem so a leaner Reader has
