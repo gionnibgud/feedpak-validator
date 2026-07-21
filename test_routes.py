@@ -57,7 +57,7 @@ def test_routes_endpoints():
 
     # /spec-info — the pinned reference version shown on the plugin UI.
     info = client.get(f"{BASE}/spec-info").json()
-    assert info["tag"] == "v1.16.0" and info["commit"] and info["repo"], info
+    assert info["tag"] == "v1.18.0" and info["commit"] and info["repo"], info
 
     # /packs — both example packs discovered, no server paths leaked.
     resp = client.get(f"{BASE}/packs").json()

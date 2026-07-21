@@ -3,7 +3,7 @@
 Validates `.feedpak` packages against the [feedpak spec](https://github.com/got-feedBack/feedpak-spec)
 from inside feedBack — as a standalone screen **and** as a service other plugins (e.g. the
 editor) can call. Wraps the two-level validator (`fpvalidate.py`, vendored, pinned to
-feedpak-spec **v1.16.0**).
+feedpak-spec **v1.18.0**).
 
 | Level | What it checks |
 |-------|----------------|
@@ -25,8 +25,9 @@ unmodified. On every pack:
 5. Every `arrangements[].file` pointer: safe relative path (no `..`, no leading `/`, no
    backslash, no drive letter), exists, doesn't escape the package root — and the JSON it
    points to conforms to `arrangement.schema.json`.
-6. Every `arrangements[].notation` pointer (if present): same path/existence checks, and the
-   JSON conforms to `notation.schema.json`.
+6. Every `arrangements[].notation` and `arrangements[].drum_tab` pointer (if present): same
+   path/existence checks, and the JSON conforms to `notation.schema.json` /
+   `drum-tab.schema.json` (per-arrangement drum charts, v1.17).
 7. Every `stems[].file` pointer: safe relative path, exists, doesn't escape the root.
 8. Every optional JSON side-file the manifest actually references — `lyrics`, `vocal_pitch`,
    `song_timeline`, `drum_tab`, `vocal_pitch_contour`, `keys`, `harmony`, `rigs`: safe path,
@@ -84,10 +85,13 @@ Invariants the JSON Schemas can't express (`fpvalidate.py`'s `_strict_schema_err
    timestamps are legal).
 10. **Positive-length spans** for `handshapes[]` and `phrases[]` (`end_time` must be `>
     start_time`), including handshapes inside `phrases[].levels[]`.
-11. **Dangling references** — an arrangement's `tones.base_rig` / `tones.changes[].rig` must
-    resolve against `rigs.json` (and the manifest must have a `rigs` pointer at all if any are
-    referenced); `rigs.json` `graph` edges/nodes must resolve to declared nodes/block ids; a
-    `nam`/`ir` realization `ref` must be a safe relative path (or contain `://` for a URI).
+11. **Dangling references** — `tones.base_rig` / `tones.changes[].rig` must resolve against
+    `rigs.json` (and the manifest must have a `rigs` pointer at all if any are referenced). Since
+    v1.18 a tone binding may also sit on a **manifest arrangement entry** (`arrangements[].tones`)
+    or on the song-level **`drum_tones`** — including on notation-only and `type: drums` entries
+    that have no arrangement JSON at all — and those resolve too. Also: `rigs.json` `graph`
+    edges/nodes must resolve to declared nodes/block ids; a `nam`/`ir`/`soundfont` realization
+    `ref` must be a safe relative path (or contain `://` for a URI).
 12. **`notation_<id>.json` measures don't overflow their time signature** — each stave/voice's
     beat durations (honoring `dot` and `tu` tuplet ratios) are summed and compared against the
     measure's `ts` capacity, carried forward across measures that omit `ts` (§7.6 "omit if
@@ -97,6 +101,28 @@ Invariants the JSON Schemas can't express (`fpvalidate.py`'s `_strict_schema_err
     measure `staves` key resolves to a declared `staves[].id`.
 14. **`lyrics.json` / `lyric_tracks` entries reject a bare `"-"`/`"+"`** as `w` (§7.1) — a
     join/line marker is a suffix on a real syllable, not a standalone entry.
+15. **Drum parts as arrangements (§5.2/§7.5, v1.17)** — since a pack may carry several drum
+    charts, **every** `drum_tab` gets the §7.5 checks above (hit time-ordering, duplicate
+    `kit[].id`, piece-vocabulary warning), not just the song-level one. Per-arrangement pointers
+    are included, deduped by **resolved path** (the primary drum part aliases the song-level
+    file, and `x.json` / `./x.json` are one file). The drum-part consistency rules themselves are
+    SHOULD-level warnings — see [warnings](#warnings-strict--should-level) — and are
+    **version-scoped to packs declaring `feedpak_version` ≥ 1.17.0**, because `type` predates
+    v1.17 as a free-form instrument hint and no earlier pack may be retroactively faulted.
+16. **MIDI sound sources (§7.9, v1.18)** — a `soundfont` realization **MUST** carry a `ref`
+    (the schema only documents this in a `$comment`, so basic can't enforce it); its `ref` gets
+    the same path-safety guard as `nam`/`ir`. Being on a non-`source` block is a *warning*, and
+    a block that simply **omits** the OPTIONAL `role` is not flagged at all — that is the spec's
+    own minimal single-block instrument rig. `intent.gm` ranges (`program` 0–127, `kit` ≥ 0) are
+    schema-enforced, so basic already covers them.
+17. **Manifest tone bindings reject unknown keys** — `arrangements[].tones` and `drum_tones` are
+    typed as bare objects in the schema, so the closed-world manifest re-check can't see inside
+    them; strict closes them against §6.9's key set (`base`, `base_rig`, `changes`,
+    `definitions`). Without this a typo'd `base_rigg` leaves the part silently unbound.
+
+**Path safety.** Strict runs even when basic has already rejected a pointer, so every strict
+side-file read is guarded — a `..` pointer is never opened, and no content from outside the
+package root can reach a validation message.
 
 ### warnings (strict) — SHOULD-level
 
@@ -108,6 +134,26 @@ Reader to tolerate:
   the original mix can't be rebuilt from the parts; the spec keeps `full` (`default: false`).
   **Warning below `feedpak_version` 1.16.0** (SHOULD); a pack declaring **≥ 1.16.0** turns this into
   an **error** (the MUST is version-scoped, so no pre-1.16 pack becomes non-conformant).
+The drum-part rules below are **version-scoped to packs declaring `feedpak_version` ≥ 1.17.0**.
+
+- **An arrangement with a `drum_tab` but no `type: drums`** (§5.2, v1.17) — a drum-tab pointer
+  makes the entry a drum part, so it SHOULD say so or a player may not offer it as one.
+- **A `type: drums` entry carrying a `file` or `notation`** (§5.2, v1.17) — a drum part's chart
+  is its `drum_tab`. A warning, not an error: the spec's MUST NOT covers only *selection and
+  grading*, and the schema's `anyOf` permits the combination.
+- **A song-level `drum_tab` that aliases no drum part, or is missing entirely** (§7.5, v1.17) —
+  when `type: drums` arrangements exist the song-level key is the *primary* part's back-compat
+  alias and SHOULD name one of their files; a wrong pointer shows an older Reader a stray extra
+  chart, and an absent one leaves it with no drum chart at all. With **no** `type: drums`
+  arrangements the song-level key is legitimately the single drum part, so nothing is flagged.
+- **`drum_tones` naming a different rig than the primary drum part's own `tones`** (§5.1/§7.5,
+  v1.18) — the entry `tones` takes precedence, so a divergence voices the kit differently
+  depending on whether the Reader supports per-arrangement drum parts.
+- **A `soundfont` realization on an explicitly non-`source` block** (§7.9, v1.18) — the engine is
+  reserved for generator blocks. A block that omits the OPTIONAL `role` is not flagged.
+- **An arrangement carrying both manifest and in-JSON `tones`** (§5.2, v1.18) — the manifest
+  binding wins *wholesale*, so the chart's own tones are silently discarded. Writers SHOULD NOT
+  emit both.
 - **No OGG/WAV baseline stem** (§5.3.2) — the pack's resolved stem codecs (explicit `codec`
   field, else file extension) include neither `vorbis` nor `pcm`, so a leaner Reader may have
   nothing it can decode.

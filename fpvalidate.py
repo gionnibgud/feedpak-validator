@@ -28,9 +28,17 @@
               drum_tab.json hits / rigs.json automation points are time-ordered
             - lyric_tracks side-files exist and schema-validate (validate.py
               never opens them); lyric_tracks[].stem resolves to a stem id
-            - tones.base_rig / tones.changes[].rig resolve against rigs.json
+            - tones.base_rig / tones.changes[].rig resolve against rigs.json —
+              for an arrangement JSON's tones, a manifest arrangement entry's
+              tones, and the song-level drum_tones (§5.2/§5.1)
             - rigs.json: graph edges/nodes resolve to declared nodes/blocks;
-              nam/ir realization refs are safe relative paths or URIs
+              nam/ir/soundfont realization refs are safe relative paths or URIs;
+              a soundfont realization has a `ref`
+            - drum parts (§5.2/§7.5): every drum_tab — song-level and
+              per-arrangement — gets the §7.5 checks, deduped by resolved path
+            - a manifest tone binding (entry `tones`, `drum_tones`) rejects
+              unknown keys — the schema types it as a bare object, so the
+              closed-world manifest check can't see inside it
             - notation_<id>.json measures don't overflow their time signature
               (voice beat-durations, incl. dot/tuplet, summed against ts);
               beat_groups sums equal the time signature numerator; measure
@@ -46,6 +54,14 @@
             - a note/chord-note carries a bend shape (bt/bnv) but bn is 0
             - a lyric_tracks kind isn't original/transliteration/translation,
               or `lyrics` doesn't point at the kind:original track's file
+            - a drum_tab on an entry that doesn't declare type: drums; a
+              song-level drum_tab that aliases no drum part or is missing
+              entirely; a type:drums entry carrying a file/notation — all
+              version-scoped to packs declaring >= 1.17.0 (§5.2/§7.5)
+            - drum_tones naming a different rig than the primary drum part's
+              own tones (§5.1/§7.5)
+            - a soundfont realization on an explicitly non-source block (§7.9)
+            - an arrangement carrying BOTH manifest and in-JSON tones (§5.2)
             - a drum hit's piece id is outside the closed v1 vocabulary
             - a note's fret exceeds 24
 
@@ -254,6 +270,58 @@ def _check_lyrics_suffix(rep: ref.Report, rel: str, data: list) -> None:
                      "are suffixes on a syllable, not standalone entries")
 
 
+def _check_drum_tab(rep: ref.Report, root: Path, rel: str) -> None:
+    """§7.5 semantics for ONE drum-tab file — the song-level pointer or any
+    `type: drums` arrangement's (1.17). Hits are time-ordered, kit piece ids are
+    unique, and a piece id outside the closed v1 vocabulary warns (unknown ids
+    MUST still round-trip, so it is not an error)."""
+    data = _read_json(root, rel)
+    if not isinstance(data, dict):
+        return  # missing/malformed is already a basic-level error
+    _monotonic(rep, rel, "hits", data.get("hits", []) or [], "t")
+    _dupes(rep, f"{rel} drum kit piece id",
+           [k.get("id") for k in data.get("kit", []) or [] if isinstance(k, dict)])
+    seen_pieces: set = set()
+    for h in data.get("hits", []) or []:
+        if not isinstance(h, dict):
+            continue
+        p = h.get("p")
+        if isinstance(p, str) and p not in _DRUM_VOCAB and p not in seen_pieces:
+            seen_pieces.add(p)
+            rep.warn(f"{rel}: drum piece id {p!r} is outside the v1 vocabulary")
+
+
+def _check_tones(rep: ref.Report, where: str, tones: object, rigs_rel: object,
+                 rigs_loaded: bool, rig_ids: set) -> None:
+    """§6.9/§7.9 tone-binding semantics, for an arrangement JSON's `tones`, a
+    manifest arrangement entry's `tones`, or the song-level `drum_tones` (1.18 —
+    all three share one shape). Changes are time-sorted and every referenced rig
+    id resolves against rigs.json."""
+    if not isinstance(tones, dict):
+        return
+    # The manifest schema types these bindings as a bare object with no
+    # properties, so the closed-world manifest re-check can't see inside them —
+    # a typo'd key would otherwise leave the part silently unbound. §6.9's key
+    # set is the same for all three sites.
+    for k in sorted(set(tones) - {"base", "base_rig", "changes", "definitions"}):
+        rep.err(f"{where}: tones has unexpected field {k!r} — not part of the feedpak spec")
+    _monotonic(rep, where, "tones.changes", tones.get("changes", []) or [], "t")
+    referenced: set = set()
+    br = tones.get("base_rig")
+    if isinstance(br, str):
+        referenced.add(br)
+    for ch in tones.get("changes", []) or []:
+        if isinstance(ch, dict) and isinstance(ch.get("rig"), str):
+            referenced.add(ch["rig"])
+    if not referenced:
+        return
+    if not isinstance(rigs_rel, str):
+        rep.err(f"{where}: tones reference rig ids but the manifest has no rigs file")
+    elif rigs_loaded:
+        for rid in sorted(referenced - rig_ids):
+            rep.err(f"{where}: tones rig {rid!r} not found in rigs.json")
+
+
 def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
     arrs = manifest.get("arrangements", []) or []
     stems = manifest.get("stems", []) or []
@@ -361,26 +429,67 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
         if isinstance(hdata, dict):
             _monotonic(rep, harmony_rel, "events", hdata.get("events", []) or [], "t")
 
+    # §7.5: since 1.17 a pack MAY carry several drum charts — the song-level
+    # `drum_tab` (the primary, and the back-compat alias) plus one per
+    # `type: drums` arrangement. Every one gets the same semantic checks; basic
+    # only schema-validates them. Deduped by path, because the primary
+    # arrangement points at the same file as the song-level key and warnings
+    # are not de-duplicated downstream (errors are, via _friendly).
     drum_rel = manifest.get("drum_tab")
-    drum_data = None
-    if isinstance(drum_rel, str) and (root / drum_rel).is_file():
-        drum_data = _read_json(root, drum_rel)
-        if isinstance(drum_data, dict):
-            _monotonic(rep, drum_rel, "hits", drum_data.get("hits", []) or [], "t")
-            _dupes(rep, "drum kit piece id",
-                   [k.get("id") for k in drum_data.get("kit", []) or [] if isinstance(k, dict)])
-            # §7.5 (SHOULD): unknown piece-ids MUST still round-trip, so this
-            # is a warning — dedupe so a repeated id warns once.
-            seen_pieces: set = set()
-            for h in drum_data.get("hits", []) or []:
-                if not isinstance(h, dict):
-                    continue
-                p = h.get("p")
-                if isinstance(p, str) and p not in _DRUM_VOCAB and p not in seen_pieces:
-                    seen_pieces.add(p)
-                    rep.warn(f"{drum_rel}: drum piece id {p!r} is outside the v1 vocabulary")
-        else:
-            drum_data = None
+    arr_drums = [a.get("drum_tab") for a in arrs if isinstance(a, dict)]
+
+    def _key(rel: str):
+        """Dedupe on the resolved path, not the spelling — `drum_tab.json` and
+        `./drum_tab.json` are one file, and checking it twice double-warns
+        (warnings, unlike errors, are not de-duplicated downstream)."""
+        try:
+            return (root / rel).resolve()
+        except OSError:
+            return rel
+
+    seen_drum: set = set()
+    for rel in [drum_rel, *arr_drums]:
+        if isinstance(rel, str) and _key(rel) not in seen_drum and (root / rel).is_file():
+            seen_drum.add(_key(rel))
+            _check_drum_tab(rep, root, rel)
+
+    # §5.2/§7.5 drum-part consistency (1.17). `type` is an open-vocabulary hint
+    # that predates 1.17 — only 1.17 gave the value `drums` its drum-part
+    # meaning — so these are version-scoped, exactly like the §5.3 `full` rule.
+    is_117 = _feedpak_ge(manifest, 1, 17)
+    # Only a pack declaring >= 1.17 means "drum part" by `type: drums`; before
+    # that it was a free-form instrument hint, so none of the drum-part rules
+    # (nor the aliasing ones below, which key off the same value) may bind.
+    drums_typed = [a for a in arrs if isinstance(a, dict) and a.get("type") == "drums"] if is_117 else []
+    for a in (a for a in arrs if isinstance(a, dict)):
+        aid = a.get("id")
+        # A drum part's chart is its drum_tab. The spec's MUST NOT covers only
+        # selection/grading; "no file, no notation" is indicative prose and the
+        # schema's anyOf permits the combination — so this is a warning.
+        if a in drums_typed:
+            for key in ("file", "notation"):
+                if a.get(key) is not None:
+                    rep.warn(f"arrangements[{aid!r}]: a type:drums arrangement carries a "
+                             f"{key!r} — a drum part's chart is its drum_tab (spec §5.2)")
+        # (SHOULD) a drum_tab pointer makes the entry a drum part, so type says so.
+        if a.get("drum_tab") is not None and a.get("type") != "drums":
+            rep.warn(f"arrangements[{aid!r}] has a drum_tab but type is {a.get('type')!r} "
+                     "— a drum part SHOULD declare type: drums (spec §5.2)")
+
+    # §7.5 (SHOULD): once a pack carries type:drums arrangements, the song-level
+    # `drum_tab` is the primary part's back-compat alias — it must name one of
+    # their files, or a pre-1.17 Reader gets a stray chart (wrong pointer) or
+    # none at all (key omitted). Gated on drums-TYPED entries only: with none,
+    # the song-level key is legitimately the single drum part.
+    if drums_typed:
+        typed_files = {d.get("drum_tab") for d in drums_typed if isinstance(d.get("drum_tab"), str)}
+        if not isinstance(drum_rel, str):
+            rep.warn("this pack has type:drums arrangements but no song-level drum_tab — it "
+                     "SHOULD alias the primary drum part, or a pre-1.17 reader sees no drum "
+                     "chart at all (spec §7.5)")
+        elif not any(_key(drum_rel) == _key(tf) for tf in typed_files):
+            rep.warn(f"song-level drum_tab {drum_rel!r} does not match any type:drums "
+                     "arrangement's drum_tab — it SHOULD alias the primary drum part (spec §7.5)")
 
     rigs_rel = manifest.get("rigs")
     rig_ids: set = set()
@@ -411,7 +520,29 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
                         if not isinstance(real, dict):
                             continue
                         eng, rr = real.get("engine"), real.get("ref")
-                        if eng in ("nam", "ir") and isinstance(rr, str) and "://" not in rr:
+                        # §7.9 (1.18): `soundfont` addresses its library exactly
+                        # as nam/ir do — a pack-relative path or an absolute URI —
+                        # so it gets the same path-safety guard.
+                        missing_ref = False
+                        if eng == "soundfont":
+                            # `ref` is REQUIRED for soundfont (the schema only says
+                            # so in a $comment).
+                            if not isinstance(rr, str) or not rr:
+                                missing_ref = True
+                                rep.err(f"{rigs_rel}: rigs[{i}].blocks[{j}] soundfont realization "
+                                        "has no 'ref' — a soundfont library path is required")
+                            # Reserved for generator blocks. `role` is OPTIONAL, so
+                            # only an explicitly non-source role is wrong — a block
+                            # that omits it is the spec's own minimal instrument rig.
+                            role = blk.get("role")
+                            if isinstance(role, str) and role != "source":
+                                rep.warn(f"{rigs_rel}: rigs[{i}].blocks[{j}] soundfont realization "
+                                         f"sits on a block with role {role!r} — soundfont is "
+                                         "reserved for role 'source' blocks")
+                        # An empty ref is already reported above; don't also fail it
+                        # for being an unsafe path — one defect, one error.
+                        if (eng in ("nam", "ir", "soundfont") and not missing_ref
+                                and isinstance(rr, str) and "://" not in rr):
                             if not ref.safe_relpath(rr):
                                 rep.err(f"{rigs_rel}: rigs[{i}] realization ref is not a "
                                          f"safe relative path: {rr!r}")
@@ -436,6 +567,34 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
                         rep.err(f"{rigs_rel}: rigs[{i}] graph edge references unknown node {n!r}")
                     for n in sorted(nodes - block_ids - {"input", "output"}):
                         rep.err(f"{rigs_rel}: rigs[{i}] graph node {n!r} does not match any block id")
+
+    # §5.2/§5.1 (1.18): a sound binding may live on a manifest arrangement entry
+    # — including notation-only and `type: drums` entries, which have no
+    # arrangement JSON at all — or on the song-level `drum_tones`. The
+    # arrangement-JSON loop below skips entries without a `file`, so resolve
+    # every manifest-level binding's rig references here.
+    for a in arrs:
+        if isinstance(a, dict) and a.get("tones") is not None:
+            _check_tones(rep, f"manifest.yaml: arrangements[{a.get('id')!r}]",
+                         a.get("tones"), rigs_rel, rigs_loaded, rig_ids)
+    drum_tones = manifest.get("drum_tones")
+    if drum_tones is not None:
+        _check_tones(rep, "manifest.yaml: drum_tones", drum_tones,
+                     rigs_rel, rigs_loaded, rig_ids)
+
+    # §5.1/§7.5 (SHOULD, 1.18): `drum_tones` is the primary drum part's sound
+    # alias — the tone twin of the song-level `drum_tab` chart alias. A drum
+    # entry's own `tones` takes precedence, so if the two name different rigs
+    # the part is voiced differently depending on whether the Reader supports
+    # per-arrangement drum parts.
+    if isinstance(drum_tones, dict) and drums_typed:
+        dt_rig = drum_tones.get("base_rig")
+        entry_rigs = {d["tones"].get("base_rig") for d in drums_typed
+                      if isinstance(d.get("tones"), dict)}
+        if entry_rigs and dt_rig not in entry_rigs:
+            rep.warn(f"drum_tones base_rig {dt_rig!r} matches no type:drums arrangement's own "
+                     "tones — it SHOULD mirror the primary drum part's binding, or the kit is "
+                     "voiced differently depending on reader support (spec §5.1/§7.5)")
 
     for idx, a in enumerate(arrs):
         if not isinstance(a, dict):
@@ -522,22 +681,14 @@ def _strict_semantics(manifest: dict, root: Path, rep: ref.Report) -> None:
 
         # §6.9: tones.changes is time-sorted; base_rig/changes[].rig must
         # resolve against rigs.json.
-        tones = d.get("tones")
-        if isinstance(tones, dict):
-            _monotonic(rep, f, "tones.changes", tones.get("changes", []) or [], "t")
-            referenced: set = set()
-            br = tones.get("base_rig")
-            if isinstance(br, str):
-                referenced.add(br)
-            for ch in tones.get("changes", []) or []:
-                if isinstance(ch, dict) and isinstance(ch.get("rig"), str):
-                    referenced.add(ch["rig"])
-            if referenced:
-                if not isinstance(rigs_rel, str):
-                    rep.err(f"{f}: tones reference rig ids but the manifest has no rigs file")
-                elif rigs_loaded:
-                    for rid in sorted(referenced - rig_ids):
-                        rep.err(f"{f}: tones rig {rid!r} not found in rigs.json")
+        _check_tones(rep, f, d.get("tones"), rigs_rel, rigs_loaded, rig_ids)
+
+        # §5.2 (1.18, SHOULD NOT): a manifest entry `tones` overrides the in-JSON
+        # one *wholesale*, so carrying both silently drops the chart's own tones.
+        if isinstance(a.get("tones"), dict) and isinstance(d.get("tones"), dict):
+            rep.warn(f"arrangements[{a.get('id')!r}] carries manifest tones AND {f} carries "
+                     "its own — the manifest wins wholesale, so the in-chart tones are "
+                     "ignored (spec §5.2)")
 
         # song-level-ish arrays that only ever live at chart top level, plus
         # the phrases[] span check — levels don't carry phrases/beats/etc.
@@ -745,7 +896,15 @@ def _load_raw(name: str) -> dict:
 def _read_json(root: Path, rel: str):
     """Read a pack-relative JSON/JSONC file for strict checks. Returns the parsed
     value or None — malformed/missing files are basic-level errors already, and
-    .jsonc (spec-legal for hand-edited packs, §6/§7) must not crash strict."""
+    .jsonc (spec-legal for hand-edited packs, §6/§7) must not crash strict.
+
+    Refuses to read outside the package root. Strict runs even when basic has
+    already rejected a pointer as unsafe, so without this guard a `..` pointer
+    in an uploaded pack would be read and its contents echoed back through a
+    strict message. Every side-file read routes through here, so one guard
+    covers them all."""
+    if not ref.safe_relpath(rel):
+        return None
     try:
         raw = (root / rel).read_text(encoding="utf-8")
         return ref._parse_jsonc(raw) if rel.endswith(".jsonc") else json.loads(raw)
@@ -898,6 +1057,33 @@ _EXPLAIN: list[tuple[object, str]] = [
      "This pack points to a file that isn't actually there — that file won't load."),
     (_has("lyric_tracks", "missing"),
      "This pack points to a lyrics file that isn't actually there — lyrics won't load."),
+    (_has("soundfont realization has no", "'ref'"),
+     "A MIDI sound source names no soundfont file, so that part has nothing to play it with."),
+    (_has("soundfont realization sits on a block with role"),
+     "A soundfont is attached to an effect block instead of a sound-generator block — only a "
+     "source block can voice MIDI."),
+    (_has("no song-level drum_tab"),
+     "This pack's drum parts are only visible to newer players — older ones will show no drum "
+     "chart at all."),
+    (_has("drum_tones base_rig", "matches no type:drums"),
+     "The drum kit's sound is set in two places that disagree, so the drums may be voiced "
+     "differently depending on the player."),
+    # more specific than the generic rig-not-found line below (first match wins),
+    # so a drum binding isn't explained as a guitar tone.
+    (_has("drum_tones", "not found in rigs.json"),
+     "The drums reference a kit sound that isn't defined in the pack's tone library."),
+    (_has("a drum part's chart is its drum_tab"),
+     "A drum part also points at a guitar/notation chart — a drum arrangement is played from "
+     "its drum tab only."),
+    (_has("SHOULD declare type: drums"),
+     "An arrangement has a drum chart but isn't labelled as drums, so players may not offer it "
+     "as a drum part."),
+    (_has("does not match any type:drums arrangement's drum_tab"),
+     "The song's main drum chart doesn't match any of its drum parts, so older players may show "
+     "a stray extra drum track."),
+    (_has("carries manifest tones AND", "in-chart tones are"),
+     "This arrangement sets its sound in two places; the manifest one wins and the chart's own "
+     "tone settings are silently discarded."),
     (_has("realization ref is not a safe relative path"),
      "A tone points at an amp/cab capture file using an unsafe path — rejected for safety."),
     (_has("is not a safe relative path"),
