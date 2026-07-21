@@ -13,7 +13,7 @@ import fpvalidate as fp
 
 def test_spec_info():
     info = fp.spec_info()
-    assert info["tag"] == "v1.16.0", info
+    assert info["tag"] == "v1.18.0", info
     assert info["commit"] and len(info["commit"]) == 40, info
     assert info["repo"] and info["repo"].startswith("https://"), info
 
@@ -407,6 +407,214 @@ def test_strict_checks():
         joined = "\n".join(r.errors)
         assert not r.ok and "hits" in joined and "not in time order" in joined, joined
 
+        # --- §5.2/§7.5 (1.17): drums as first-class arrangements ---------------
+        # A per-arrangement drum_tab gets the SAME strict checks as the song-level
+        # one; basic (since 1.17) only schema-validates it.
+        _GTR = {"id": "lead", "name": "Lead", "file": "arrangements/lead.json", "type": "guitar"}
+        _V17 = {"feedpak_version": "1.17.0"}   # the drum-part rules are version-scoped
+        drum2 = Path(t) / "drum2.feedpak"
+        _pack(drum2, drum_tab={"version": 1, "hits": [{"t": 1.0, "p": "kick"}]},
+              manifest_extra={**_V17,
+                              "arrangements": [_GTR, {"id": "drums_live", "name": "Drums (Live)",
+                                                       "type": "drums",
+                                                       "drum_tab": "drum_tab_live.json"}]})
+        (drum2 / "drum_tab_live.json").write_text(json.dumps(
+            {"version": 1, "hits": [{"t": 2.0, "p": "kick"}, {"t": 1.0, "p": "snare"}]}))
+        assert fp.check(drum2, strict=False).ok, \
+            "loose spec: basic schema-checks a per-arrangement drum_tab but never orders it"
+        r = fp.check(drum2, strict=True)
+        joined = "\n".join(r.errors)
+        assert not r.ok and "drum_tab_live.json" in joined and "not in time order" in joined, joined
+        # (SHOULD) the song-level drum_tab aliases no drum part here — warn.
+        assert any("does not match any type:drums" in w for w in r.warnings), r.warnings
+
+        # The primary drum arrangement aliases the song-level file: checked ONCE,
+        # so an out-of-vocab piece warns once (warnings aren't dedup'd downstream).
+        # The primary drum arrangement aliases the song-level file — one file,
+        # checked ONCE even when the two pointers are spelled differently, so an
+        # out-of-vocab piece warns once (warnings aren't dedup'd downstream).
+        alias = Path(t) / "alias.feedpak"
+        _pack(alias, drum_tab={"version": 1, "hits": [{"t": 1.0, "p": "cowbell"}]},
+              manifest_extra={**_V17,
+                              "arrangements": [_GTR, {"id": "drums_kit", "name": "Drums",
+                                                       "type": "drums",
+                                                       "drum_tab": "./drum_tab.json"}]})
+        r = fp.check(alias, strict=True)
+        assert r.ok, r.errors
+        assert sum("cowbell" in w for w in r.warnings) == 1, r.warnings
+        assert not any("does not match any type:drums" in w for w in r.warnings), \
+            "'./x.json' and 'x.json' are the same file — no spurious alias warning"
+
+        # A drum part's chart is its drum_tab. The spec's MUST NOT covers only
+        # selection/grading and the schema's anyOf allows the combination, so
+        # this WARNS (both `file` and `notation`) rather than failing the pack.
+        for key, other in (("file", "arrangements/lead.json"),
+                            ("notation", "notation_keys.json")):
+            df = Path(t) / f"drumfile_{key}.feedpak"
+            _pack(df, drum_tab={"version": 1, "hits": []},
+                  manifest_extra={**_V17,
+                                  "arrangements": [{"id": "drums_kit", "name": "Drums",
+                                                     "type": "drums",
+                                                     "drum_tab": "drum_tab.json", key: other}]})
+            (df / "notation_keys.json").write_text(json.dumps(
+                {"version": 1, "staves": [{"id": "rh", "clef": "G2"}], "measures": []}))
+            r = fp.check(df, strict=True)
+            assert r.ok, (key, r.errors)
+            assert any("a drum part's chart is its drum_tab" in w for w in r.warnings), (key, r.warnings)
+
+        # ...and it is version-scoped: `type` predates 1.17 as a free-form
+        # instrument hint, so an older pack using it that way stays clean.
+        drumold = Path(t) / "drumold.feedpak"
+        _pack(drumold, manifest_extra={"feedpak_version": "1.12.0",
+                                        "arrangements": [{"id": "d", "name": "D", "type": "drums",
+                                                           "file": "arrangements/lead.json"}]})
+        r = fp.check(drumold, strict=True)
+        assert r.ok and not any("drum part" in w for w in r.warnings), (r.errors, r.warnings)
+
+        # (SHOULD) a drum_tab pointer makes the entry a drum part, so type says so.
+        drumtype = Path(t) / "drumtype.feedpak"
+        _pack(drumtype, drum_tab={"version": 1, "hits": []},
+              manifest_extra={**_V17,
+                              "arrangements": [{"id": "perc", "name": "Perc",
+                                                 "type": "percussion",
+                                                 "drum_tab": "drum_tab.json"}]})
+        r = fp.check(drumtype, strict=True)
+        assert r.ok, r.errors
+        assert any("SHOULD declare type: drums" in w for w in r.warnings), r.warnings
+        # ...but with no type:drums entry the song-level key IS the single drum
+        # part, so the alias warning must NOT fire (its text would be false).
+        assert not any("does not match any type:drums" in w for w in r.warnings), r.warnings
+
+        # (SHOULD) drum parts present but no song-level drum_tab at all — a
+        # pre-1.17 reader then sees no drum chart whatsoever.
+        noalias = Path(t) / "noalias.feedpak"
+        _pack(noalias, manifest_extra={**_V17,
+                                        "arrangements": [_GTR, {"id": "dk", "name": "DK",
+                                                                 "type": "drums",
+                                                                 "drum_tab": "dk.json"}]})
+        (noalias / "dk.json").write_text(json.dumps({"version": 1, "hits": []}))
+        r = fp.check(noalias, strict=True)
+        assert r.ok, r.errors
+        assert any("no song-level drum_tab" in w for w in r.warnings), r.warnings
+
+        # --- §5.2/§7.9 (1.18): MIDI-voiced sound sources -----------------------
+        def _sfrig(real, role="source"):
+            return {"version": 1, "rigs": [{"id": "r1", "blocks": [
+                {"id": "src", "role": role, "realizations": [real]}]}]}
+
+        # a soundfont library ref is a pack-relative path — same guard as nam/ir.
+        sfbad = Path(t) / "sfbad.feedpak"
+        _pack(sfbad, rigs=_sfrig({"engine": "soundfont", "format": "sf2", "ref": "../evil.sf2"}))
+        r = fp.check(sfbad, strict=True)
+        assert not r.ok and "not a safe relative path" in "\n".join(r.errors), r.errors
+
+        # `ref` is REQUIRED for soundfont (schema only says so in a $comment).
+        sfnoref = Path(t) / "sfnoref.feedpak"
+        _pack(sfnoref, rigs=_sfrig({"engine": "soundfont", "format": "sf2"}))
+        assert fp.check(sfnoref, strict=False).ok, "loose spec: basic can't require it"
+        r = fp.check(sfnoref, strict=True)
+        assert not r.ok and "soundfont realization has no" in "\n".join(r.errors), r.errors
+
+        # an empty ref is ONE defect — it must not also be reported as unsafe.
+        assert sum("ref" in e for e in fp.check(
+            Path(t) / "sfnoref.feedpak", strict=True).errors) == 1, "one defect, one error"
+
+        # a well-formed soundfont source block must PASS — the guard above must
+        # not reject the shape the spec itself documents.
+        sfgood = Path(t) / "sfgood.feedpak"
+        _pack(sfgood, rigs=_sfrig({"engine": "soundfont", "format": "sf2",
+                                    "ref": "sf/piano.sf2", "bank": 0, "program": 0}))
+        assert fp.check(sfgood, strict=True).ok, "a valid soundfont source block must pass strict"
+
+        # `role` is OPTIONAL — the spec's minimal instrument rig is a lone block
+        # with no role at all, so omitting it must NOT be flagged.
+        sfnorole = Path(t) / "sfnorole.feedpak"
+        _pack(sfnorole, rigs={"version": 1, "rigs": [{"id": "r1", "blocks": [
+            {"id": "s", "realizations": [{"engine": "soundfont", "format": "sf2",
+                                           "ref": "sf/x.sf2"}]}]}]})
+        r = fp.check(sfnorole, strict=True)
+        assert r.ok and not any("role" in w for w in r.warnings), (r.errors, r.warnings)
+
+        # an EXPLICITLY non-source role is worth flagging — as a warning (the
+        # restriction is a vocabulary parenthetical, not a §7.9 MUST).
+        sfrole = Path(t) / "sfrole.feedpak"
+        _pack(sfrole, rigs=_sfrig({"engine": "soundfont", "format": "sf2",
+                                    "ref": "sf/x.sf2"}, role="amp"))
+        r = fp.check(sfrole, strict=True)
+        assert r.ok, r.errors
+        assert any("reserved for role 'source'" in w for w in r.warnings), r.warnings
+
+        # Manifest-level tone bindings (entry `tones`, song-level `drum_tones`)
+        # resolve their rig ids too — the arrangement-JSON loop never sees them,
+        # since a notation-only / drum entry has no `file` at all.
+        mtones = Path(t) / "mtones.feedpak"
+        _pack(mtones, rigs={"version": 1, "rigs": [{"id": "real-rig", "blocks": []}]},
+              drum_tab={"version": 1, "hits": []},
+              manifest_extra={"arrangements": [{"id": "keys", "name": "Keys", "type": "piano",
+                                                 "notation": "notation_keys.json",
+                                                 "tones": {"base_rig": "ghost-rig"}}],
+                              "drum_tones": {"base_rig": "ghost-drums"}})
+        (mtones / "notation_keys.json").write_text(json.dumps(
+            {"version": 1, "staves": [{"id": "rh", "clef": "G2"}], "measures": []}))
+        assert fp.check(mtones, strict=False).ok, "loose spec: basic never resolves rig ids"
+        r = fp.check(mtones, strict=True)
+        joined = "\n".join(r.errors)
+        assert not r.ok and "ghost-rig" in joined and "ghost-drums" in joined, r.errors
+
+        # (SHOULD NOT) manifest tones override in-JSON tones wholesale — warn
+        # when a pack carries both, since the chart's own tones are discarded.
+        dualtones = Path(t) / "dualtones.feedpak"
+        _pack(dualtones, tones={"base_rig": "r1"}, arr_extra={"tones": {"base_rig": "r1"}},
+              rigs={"version": 1, "rigs": [{"id": "r1", "blocks": []}]})
+        r = fp.check(dualtones, strict=True)
+        assert r.ok, r.errors
+        assert any("carries manifest tones AND" in w for w in r.warnings), r.warnings
+
+        # a manifest tone binding is schema-typed as a bare object, so the
+        # closed-world manifest re-check can't see inside it — a typo'd key
+        # would leave the part silently unbound.
+        tonetypo = Path(t) / "tonetypo.feedpak"
+        _pack(tonetypo, rigs={"version": 1, "rigs": [{"id": "r1", "blocks": []}]},
+              manifest_extra={"arrangements": [{"id": "k", "name": "K", "type": "piano",
+                                                 "notation": "notation_k.json",
+                                                 "tones": {"base_rigg": "r1"}}]})
+        (tonetypo / "notation_k.json").write_text(json.dumps(
+            {"version": 1, "staves": [{"id": "rh", "clef": "G2"}], "measures": []}))
+        assert fp.check(tonetypo, strict=False).ok, "loose spec: basic can't see inside tones"
+        r = fp.check(tonetypo, strict=True)
+        assert not r.ok and "unexpected field 'base_rigg'" in "\n".join(r.errors), r.errors
+
+        # (SHOULD) drum_tones is the primary drum part's sound alias — if it
+        # names a different rig than the part's own tones, the kit is voiced
+        # differently depending on whether the reader supports drum parts.
+        dtdiv = Path(t) / "dtdiv.feedpak"
+        _pack(dtdiv, drum_tab={"version": 1, "hits": []},
+              rigs={"version": 1, "rigs": [{"id": "kit-a", "blocks": []},
+                                            {"id": "kit-b", "blocks": []}]},
+              manifest_extra={**_V17, "feedpak_version": "1.18.0",
+                              "drum_tones": {"base_rig": "kit-a"},
+                              "arrangements": [{"id": "dk", "name": "DK", "type": "drums",
+                                                 "drum_tab": "drum_tab.json",
+                                                 "tones": {"base_rig": "kit-b"}}]})
+        r = fp.check(dtdiv, strict=True)
+        assert r.ok, r.errors
+        assert any("matches no type:drums" in w for w in r.warnings), r.warnings
+
+        # strict must never read outside the package root, even though basic
+        # has already rejected the pointer — it would echo foreign file content
+        # back to the caller (uploads are untrusted).
+        trav = Path(t) / "trav.feedpak"
+        (Path(t) / "outside.json").write_text(json.dumps(
+            {"version": 1, "hits": [{"t": 1.0, "p": "LEAKED"}]}))
+        _pack(trav, manifest_extra={**_V17,
+                                     "arrangements": [_GTR, {"id": "d", "name": "D",
+                                                              "type": "drums",
+                                                              "drum_tab": "../outside.json"}]})
+        r = fp.check(trav, strict=True)
+        assert not r.ok, "basic must reject the unsafe pointer"
+        assert not any("LEAKED" in x for x in r.errors + r.warnings), \
+            f"strict read outside the pack root: {r.errors + r.warnings}"
+
         # id uniqueness: rig id, drum kit piece id, lyric track id, notation stave id.
         rigdup = Path(t) / "rigdup.feedpak"
         _pack(rigdup, rigs={"version": 1, "rigs": [{"id": "a", "blocks": []}, {"id": "a", "blocks": []}]})
@@ -418,7 +626,7 @@ def test_strict_checks():
         _pack(kitdup, drum_tab={"version": 1, "kit": [{"id": "kick"}, {"id": "kick"}], "hits": []})
         assert fp.check(kitdup, strict=False).ok
         r = fp.check(kitdup, strict=True)
-        assert not r.ok and "duplicate drum kit piece id: 'kick'" in "\n".join(r.errors), r.errors
+        assert not r.ok and "duplicate drum_tab.json drum kit piece id: 'kick'" in "\n".join(r.errors), r.errors
 
         ltdup = Path(t) / "ltdup.feedpak"
         _pack(ltdup, lyric_tracks=[
@@ -610,6 +818,18 @@ def test_explanations():
         "lyrics pointer does not name a kind:original track's file — pre-1.11 readers may show nothing",
         "drum_tab.json: drum piece id 'cowbell' is outside the v1 vocabulary",
         "arrangements/lead.json: notes[0].f=25 exceeds fret 24",
+        # Phase 4 — drums as arrangements (1.17) + MIDI sound sources (1.18)
+        "rigs.json: rigs[0] soundfont realization has no 'ref' — a soundfont library path is required",
+        "rigs.json: rigs[0] soundfont realization sits on a block with role 'amp' — soundfont is "
+        "reserved for role 'source' blocks",
+        "arrangements['drums_kit']: a type:drums arrangement carries a 'file' — a drum part's "
+        "chart is its drum_tab (spec §5.2)",
+        "arrangements['perc'] has a drum_tab but type is 'percussion' — a drum part SHOULD "
+        "declare type: drums (spec §5.2)",
+        "song-level drum_tab 'drum_tab.json' does not match any type:drums arrangement's "
+        "drum_tab — it SHOULD alias the primary drum part (spec §7.5)",
+        "arrangements['lead'] carries manifest tones AND arrangements/lead.json carries its own "
+        "— the manifest wins wholesale, so the in-chart tones are ignored (spec §5.2)",
     ]
     explanations = [fp._explain(c) for c in _EXPLAIN_CASES]
     assert all(e != fp._EXPLAIN_FALLBACK for e in explanations), \
@@ -627,6 +847,10 @@ def test_explanations():
         "stems were separated (stem_separation present) but no reserved 'full' "
         "mixdown stem is retained — the original mix cannot be rebuilt from the "
         "separated parts (spec §5.3) — MUST at feedpak_version >= 1.16.0",
+        # manifest-level tone bindings (1.18) — same dangling-rig rule as the
+        # arrangement-JSON form already in _EXPLAIN_CASES
+        "manifest.yaml: arrangements['keys']: tones rig 'ghost-rig' not found in rigs.json",
+        "manifest.yaml: drum_tones: tones rig 'ghost-drums' not found in rigs.json",
     ]
     for v in _EXPLAIN_VARIANTS:
         assert fp._explain(v) != fp._EXPLAIN_FALLBACK, v
